@@ -563,6 +563,9 @@ const RecallModule = {
         const revaccinationDone = petStatus?.revaccinationRecordId
             ? DataStore.data.vaccinationRecords.find(r => r.id === petStatus.revaccinationRecordId)
             : null;
+        const hasRevacChain = revaccinationDone || (revaccinateApt && revaccinateApt.status === 'completed');
+        const expandedKey = `recall_recon_${recallId}_${record.id}`;
+        const isExpanded = this.reconciliationExpanded?.[expandedKey];
 
         const options = DataStore.RECALL_PET_STATUS_ORDER.map(status => {
             const label = DataStore.RECALL_PET_STATUS_LABELS[status];
@@ -582,6 +585,18 @@ const RecallModule = {
                 ${batch ? `<span style="color:#8c8c8c; margin-left:4px;">（批次：${batch.batchNo}）</span>` : ''}
             </div>`;
         }
+
+        const reconBtn = hasRevacChain
+            ? `<button class="btn btn-outline" style="font-size:11px; padding:0 10px; height:30px;" onclick="RecallModule.toggleReconciliation('${recallId}', '${record.id}')">
+                    ${isExpanded ? '收起' : '📊'} 对账
+                </button>`
+            : '';
+
+        const reconContent = (isExpanded && hasRevacChain)
+            ? `<div style="margin-top: 10px; padding: 12px; background: #f9fafb; border-radius: 8px; border-left: 3px solid #1677ff;">
+                    ${this.renderReconciliationTimeline(recallId, record.id)}
+                </div>`
+            : '';
 
         return `
             <div class="record-item">
@@ -612,14 +627,229 @@ const RecallModule = {
                     <button class="btn btn-primary" style="font-size:11px; padding:0 10px; height:30px;" onclick="RecallModule.openRecallAppointModal('${recallId}', '${record.id}', 'revaccinate')">
                         💉 补种
                     </button>
+                    ${reconBtn}
                     ${remark ? `
                         <span style="font-size: 11px; color: #999; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                             ${Utils.escapeHtml(remark)}
                         </span>
                     ` : ''}
                 </div>
+                ${reconContent}
             </div>
         `;
+    },
+
+    reconciliationExpanded: {},
+
+    toggleReconciliation(recallId, recordId) {
+        const key = `recall_recon_${recallId}_${recordId}`;
+        if (!this.reconciliationExpanded) this.reconciliationExpanded = {};
+        this.reconciliationExpanded[key] = !this.reconciliationExpanded[key];
+        this.showDetail(recallId);
+    },
+
+    renderReconciliationTimeline(recallId, recordId) {
+        const record = DataStore.data.vaccinationRecords.find(r => r.id === recordId);
+        if (!record) return '';
+        const petStatus = DataStore.getRecallPetStatus(recallId, recordId);
+        if (!petStatus) return '';
+
+        const nodes = [];
+
+        nodes.push({
+            type: 'origin',
+            icon: '💉',
+            color: '#1677ff',
+            title: '原接种',
+            subtitle: `${record.vaccinationDate} ${record.vaccinationTime}`,
+            desc: `批次 ${record.batchNo} · 宠主 ${record.ownerName}`,
+            action: () => {
+                App.navigateTo('page-batch');
+                setTimeout(() => {
+                    const batch = DataStore.data.vaccineBatches.find(b => b.batchNo === record.batchNo);
+                    if (batch) BatchModule.showDetail(batch.id);
+                }, 100);
+            }
+        });
+
+        nodes.push({
+            type: 'freeze',
+            icon: '❄️',
+            color: '#722ed1',
+            title: '召回冻结',
+            subtitle: petStatus.updatedAt ? Utils.formatDate(petStatus.updatedAt, 'MM-DD HH:mm') : '-',
+            desc: `状态：${DataStore.RECALL_PET_STATUS_LABELS[petStatus.status] || petStatus.status}`,
+            action: () => Utils.showToast('召回详情当前页面', 'info')
+        });
+
+        if (petStatus.reexamAppointmentId) {
+            const apt = DataStore.data.appointments.find(a => a.id === petStatus.reexamAppointmentId);
+            if (apt) {
+                nodes.push({
+                    type: 'reexam',
+                    icon: '📅',
+                    color: '#1677ff',
+                    title: '复查预约',
+                    subtitle: `${apt.date} ${apt.timeSlot}`,
+                    desc: `状态：${apt.status === 'completed' ? '已完成' : (apt.status === 'cancelled' ? '已取消' : '待就诊')}`,
+                    action: () => {
+                        App.navigateTo('page-schedule');
+                        Utils.showToast('已跳转到排期页面', 'info');
+                    }
+                });
+            }
+        }
+
+        if (petStatus.revaccinateAppointmentId) {
+            const apt = DataStore.data.appointments.find(a => a.id === petStatus.revaccinateAppointmentId);
+            const batch = petStatus.revaccinateBatchId ? DataStore.getBatch(petStatus.revaccinateBatchId) : null;
+            if (apt) {
+                nodes.push({
+                    type: 'revac_apt',
+                    icon: '💉',
+                    color: '#fa8c16',
+                    title: '补种预约',
+                    subtitle: `${apt.date} ${apt.timeSlot}`,
+                    desc: `新批次：${batch ? batch.batchNo : '-'} · ${batch ? `可用${batch.availableQty}剂` : ''}`,
+                    action: () => {
+                        App.navigateTo('page-schedule');
+                        Utils.showToast('已跳转到排期页面', 'info');
+                    }
+                });
+
+                const freezeLedger = DataStore.data.stockLedger.find(
+                    l => l.batchId === petStatus.revaccinateBatchId && l.relatedId === apt.id && l.type === DataStore.STOCK_LEDGER_TYPES.APPOINTMENT_RESERVE
+                );
+                if (freezeLedger) {
+                    nodes.push({
+                        type: 'stock_reserve',
+                        icon: '📦',
+                        color: '#fa8c16',
+                        title: '库存·预约占用',
+                        subtitle: Utils.formatDate(freezeLedger.createdAt, 'MM-DD HH:mm'),
+                        desc: `批次 ${batch?.batchNo || '-'} · -1剂 · 余${freezeLedger.afterQty}剂`,
+                        action: () => {
+                            App.navigateTo('page-batch');
+                            setTimeout(() => {
+                                if (petStatus.revaccinateBatchId) BatchModule.showDetail(petStatus.revaccinateBatchId);
+                            }, 100);
+                        }
+                    });
+                }
+            }
+        }
+
+        if (petStatus.revaccinationRecordId) {
+            const revac = DataStore.data.vaccinationRecords.find(r => r.id === petStatus.revaccinationRecordId);
+            const batch = petStatus.revaccinateBatchId ? DataStore.getBatch(petStatus.revaccinateBatchId) : null;
+            if (revac) {
+                nodes.push({
+                    type: 'revac_done',
+                    icon: '✅',
+                    color: '#52c41a',
+                    title: '补种完成',
+                    subtitle: `${revac.vaccinationDate} ${revac.vaccinationTime}`,
+                    desc: `新批次 ${batch?.batchNo || '-'} · 已接种`,
+                    action: () => {
+                        App.navigateTo('page-batch');
+                        setTimeout(() => {
+                            if (petStatus.revaccinateBatchId) BatchModule.showDetail(petStatus.revaccinateBatchId);
+                        }, 100);
+                    }
+                });
+
+                const deductLedger = DataStore.data.stockLedger.find(
+                    l => l.batchId === petStatus.revaccinateBatchId && l.relatedId === revac.id && l.type === DataStore.STOCK_LEDGER_TYPES.VACCINATE_DEDUCT
+                );
+                if (deductLedger) {
+                    nodes.push({
+                        type: 'stock_deduct',
+                        icon: '📉',
+                        color: '#52c41a',
+                        title: '库存·接种扣减',
+                        subtitle: Utils.formatDate(deductLedger.createdAt, 'MM-DD HH:mm'),
+                        desc: `批次 ${batch?.batchNo || '-'} · -1剂 · 余${deductLedger.afterQty}剂`,
+                        action: () => {
+                            App.navigateTo('page-batch');
+                            setTimeout(() => {
+                                if (petStatus.revaccinateBatchId) BatchModule.showDetail(petStatus.revaccinateBatchId);
+                            }, 100);
+                        }
+                    });
+                }
+            }
+        }
+
+        if (record.revaccinationRecordId) {
+            nodes.push({
+                type: 'link',
+                icon: '🔗',
+                color: '#8c8c8c',
+                title: '双向关联已建立',
+                subtitle: '闭环完成',
+                desc: '原接种↔补种接种 双向关联',
+                action: () => Utils.showToast('召回补种闭环已验证完成', 'success')
+            });
+        }
+
+        let html = '<div style="position: relative; padding-left: 24px;">';
+        nodes.forEach((node, i) => {
+            const isLast = i === nodes.length - 1;
+            html += `
+                <div style="position: relative; margin-bottom: ${isLast ? '0' : '16px'};">
+                    <div style="position: absolute; left: -24px; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: ${node.color}20; display: flex; align-items: center; justify-content: center; font-size: 11px;">
+                        ${node.icon}
+                    </div>
+                    ${!isLast ? `<div style="position: absolute; left: -15px; top: 22px; bottom: -16px; width: 2px; background: ${node.color}30;"></div>` : ''}
+                    <div style="cursor: pointer;" onclick="RecallModule.jumpFromReconciliation('${node.type}', '${recallId}', '${recordId}')">
+                        <div style="font-size: 13px; font-weight: 500; color: #333;">
+                            ${node.title}
+                            <span style="font-size: 10px; color: ${node.color}; margin-left: 6px;">点击跳转 →</span>
+                        </div>
+                        <div style="font-size: 11px; color: #8c8c8c; margin-top: 2px;">${node.subtitle}</div>
+                        <div style="font-size: 11px; color: #666; margin-top: 2px;">${node.desc}</div>
+                    </div>
+                </div>
+            `;
+        });
+        html += '</div>';
+
+        return html;
+    },
+
+    jumpFromReconciliation(type, recallId, recordId) {
+        const petStatus = DataStore.getRecallPetStatus(recallId, recordId);
+        if (!petStatus) return;
+        const record = DataStore.data.vaccinationRecords.find(r => r.id === recordId);
+
+        switch (type) {
+            case 'origin':
+                if (record) {
+                    App.navigateTo('page-batch');
+                    setTimeout(() => {
+                        const batch = DataStore.data.vaccineBatches.find(b => b.batchNo === record.batchNo);
+                        if (batch) BatchModule.showDetail(batch.id);
+                    }, 100);
+                }
+                break;
+            case 'freeze':
+            case 'reexam':
+            case 'revac_apt':
+                App.navigateTo('page-schedule');
+                Utils.showToast('请在排期页面查看对应预约', 'info');
+                break;
+            case 'stock_reserve':
+            case 'stock_deduct':
+            case 'revac_done':
+                if (petStatus.revaccinateBatchId) {
+                    App.navigateTo('page-batch');
+                    setTimeout(() => BatchModule.showDetail(petStatus.revaccinateBatchId), 100);
+                }
+                break;
+            case 'link':
+                Utils.showToast('✅ 召回补种闭环验证完成', 'success');
+                break;
+        }
     },
 
     updatePetStatus(recallId, recordId, newStatus) {

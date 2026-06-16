@@ -173,8 +173,108 @@ const DataStore = {
             const end = new Date(filters.endDate + 'T23:59:59').getTime();
             list = list.filter(l => new Date(l.createdAt).getTime() <= end);
         }
+        if (filters.keyword && filters.keyword.trim()) {
+            const kw = filters.keyword.trim().toLowerCase();
+            list = list.filter(l => {
+                if (l.remark && l.remark.toLowerCase().includes(kw)) return true;
+                if (l.typeLabel && l.typeLabel.toLowerCase().includes(kw)) return true;
+                if (l.relatedId && l.relatedId.toLowerCase().includes(kw)) return true;
+                const related = this.getRelatedInfo(l.relatedId, l.relatedType);
+                if (related) {
+                    if (related.title && related.title.toLowerCase().includes(kw)) return true;
+                    if (related.subtitle && related.subtitle.toLowerCase().includes(kw)) return true;
+                }
+                return false;
+            });
+        }
         
         return list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    },
+
+    getStockLedgerForExport(batchId, filters = {}) {
+        const ledger = this.getStockLedgerByBatch(batchId, filters);
+        const batch = this.getBatch(batchId);
+        const summary = this.getStockLedgerSummary(batchId, filters);
+
+        const rows = ledger.map((l, idx) => {
+            const related = this.getRelatedInfo(l.relatedId, l.relatedType);
+            return {
+                序号: idx + 1,
+                变动时间: Utils.formatDate(l.createdAt, 'YYYY-MM-DD HH:mm:ss'),
+                变动类型: l.typeLabel || l.type,
+                变动数量: l.changeQty > 0 ? `+${l.changeQty}` : `${l.changeQty}`,
+                变动前: l.beforeQty,
+                变动后: l.afterQty,
+                备注: l.remark || '',
+                关联类型: related ? related.label : (l.relatedType || '-'),
+                关联信息: related ? related.title : '-',
+                关联时间: related ? (related.subtitle || '-') : '-',
+                关联单号: l.relatedId || '-'
+            };
+        });
+
+        return {
+            batch: batch ? {
+                疫苗名称: batch.vaccineName,
+                批号: batch.batchNo,
+                生产厂家: batch.manufacturer || '-',
+                有效期至: batch.expireDate,
+                总入库量: batch.stockQty,
+                已使用: batch.usedQty,
+                预约占用: batch.reservedQty,
+                召回冻结: batch.frozenQty || 0,
+                当前可用: batch.availableQty
+            } : {},
+            summary: {
+                期初余额: summary.startBalance,
+                本期入库: summary.totalIn,
+                本期出库: summary.totalOut,
+                期末余额: summary.endBalance,
+                记录条数: summary.recordCount
+            },
+            rows
+        };
+    },
+
+    exportStockLedgerToCSV(batchId, filters = {}) {
+        const data = this.getStockLedgerForExport(batchId, filters);
+        const batch = data.batch;
+        const summary = data.summary;
+        const rows = data.rows;
+
+        let csv = '\uFEFF';
+
+        csv += '库存台账对账单\n';
+        csv += `疫苗名称,${batch.疫苗名称 || ''}\n`;
+        csv += `批号,${batch.批号 || ''}\n`;
+        csv += `生产厂家,${batch.生产厂家 || ''}\n`;
+        csv += `有效期至,${batch.有效期至 || ''}\n`;
+        csv += `导出时间,${Utils.formatDate(new Date().toISOString(), 'YYYY-MM-DD HH:mm:ss')}\n`;
+        csv += '\n';
+
+        csv += '汇总信息\n';
+        csv += `期初余额,${summary.期初余额} 剂\n`;
+        csv += `本期入库,+${summary.本期入库} 剂\n`;
+        csv += `本期出库,-${summary.本期出库} 剂\n`;
+        csv += `期末余额,${summary.期末余额} 剂\n`;
+        csv += `记录条数,${summary.记录条数} 条\n`;
+        csv += '\n';
+
+        if (rows.length > 0) {
+            const headers = Object.keys(rows[0]);
+            csv += headers.join(',') + '\n';
+            rows.forEach(row => {
+                csv += headers.map(h => {
+                    let val = String(row[h] || '');
+                    if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+                        val = '"' + val.replace(/"/g, '""') + '"';
+                    }
+                    return val;
+                }).join(',') + '\n';
+            });
+        }
+
+        return csv;
     },
 
     getStockLedgerSummary(batchId, filters = {}) {

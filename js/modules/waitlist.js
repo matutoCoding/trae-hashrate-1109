@@ -1,9 +1,57 @@
 const WaitlistModule = {
     currentDetailWaitlistId: null,
+    uiRefreshTimer: null,
+    dateFilter: '',
 
     init() {
         this.bindEvents();
         this.render();
+        this.startUiRefresh();
+    },
+
+    startUiRefresh() {
+        if (this.uiRefreshTimer) clearInterval(this.uiRefreshTimer);
+        this.uiRefreshTimer = setInterval(() => {
+            if (App.currentPage === 'page-waitlist') {
+                this.refreshCountdowns();
+                if (this.currentDetailWaitlistId) {
+                    this.refreshDetailCountdown();
+                }
+            }
+        }, 1000);
+    },
+
+    refreshCountdowns() {
+        const items = document.querySelectorAll('#waitlistList .waitlist-item');
+        if (!items || items.length === 0) return;
+
+        const now = new Date();
+        items.forEach(item => {
+            const entryId = item.dataset.entryId;
+            const entry = DataStore.data.waitlistEntries.find(e => e.id === entryId);
+            if (!entry || entry.status !== 'notified' || !entry.notifiedAt) return;
+
+            const notified = new Date(entry.notifiedAt);
+            const timeoutMs = (entry.notifyExpireMinutes || 15) * 60 * 1000;
+            const remainMs = timeoutMs - (now - notified);
+            const extraEl = item.querySelector('.waitlist-countdown-extra');
+            if (extraEl) {
+                if (remainMs > 0) {
+                    const remainSec = Math.ceil(remainMs / 1000);
+                    const min = Math.floor(remainSec / 60);
+                    const sec = remainSec % 60;
+                    extraEl.innerHTML = `<span style="color:#ff4d4f; font-size:11px;">⏳ ${min}分${String(sec).padStart(2, '0')}秒后超时</span>`;
+                } else {
+                    extraEl.innerHTML = `<span style="color:#999; font-size:11px;">即将超时</span>`;
+                }
+            }
+        });
+    },
+
+    refreshDetailCountdown() {
+        if (!this.currentDetailWaitlistId) return;
+        const entry = DataStore.data.waitlistEntries.find(e => e.id === this.currentDetailWaitlistId);
+        if (!entry) return;
     },
 
     bindEvents() {
@@ -35,6 +83,14 @@ const WaitlistModule = {
             ScheduleModule.render();
             App.updateDashboardStats();
         });
+
+        const dateFilter = document.getElementById('waitlistDateFilter');
+        if (dateFilter) {
+            dateFilter.addEventListener('change', (e) => {
+                this.dateFilter = e.target.value;
+                this.renderWaitlistList();
+            });
+        }
     },
 
     render() {
@@ -75,16 +131,21 @@ const WaitlistModule = {
 
     renderWaitlistList() {
         const container = document.getElementById('waitlistList');
-        const waitlist = DataStore.data.waitlistEntries
-            .filter(w => w.status !== 'expired' && w.status !== 'confirmed')
-            .sort((a, b) => {
-                const statusOrder = { notified: 0, waiting: 1 };
-                if (statusOrder[a.status] !== statusOrder[b.status]) {
-                    return statusOrder[a.status] - statusOrder[b.status];
-                }
-                if (a.date !== b.date) return a.date.localeCompare(b.date);
-                return a.rank - b.rank;
-            });
+        let waitlist = DataStore.data.waitlistEntries
+            .filter(w => w.status !== 'expired' && w.status !== 'confirmed');
+
+        if (this.dateFilter) {
+            waitlist = waitlist.filter(w => w.date === this.dateFilter);
+        }
+
+        waitlist = waitlist.sort((a, b) => {
+            const statusOrder = { notified: 0, waiting: 1 };
+            if (statusOrder[a.status] !== statusOrder[b.status]) {
+                return statusOrder[a.status] - statusOrder[b.status];
+            }
+            if (a.date !== b.date) return a.date.localeCompare(b.date);
+            return a.rank - b.rank;
+        });
 
         if (waitlist.length === 0) {
             container.innerHTML = `
@@ -189,7 +250,7 @@ const WaitlistModule = {
                 </div>
                 <div style="text-align: right;">
                     <span class="waitlist-status ${statusClass}">${statusText}</span>
-                    <div style="margin-top: 4px;">${extraInfo}</div>
+                    <div class="waitlist-countdown-extra" style="margin-top: 4px;">${extraInfo}</div>
                 </div>
             </div>
         `;

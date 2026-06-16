@@ -261,6 +261,12 @@ const BatchModule = {
             <div class="detail-section">
                 <div class="detail-section-title">库存变动流水（${ledger.length}条）</div>
                 <div style="background:#f9fafb; border-radius:8px; padding:12px; margin-bottom:12px;">
+                    <div style="display:grid; grid-template-columns:1fr auto; gap:8px; margin-bottom:8px;">
+                        <div style="position: relative;">
+                            <input type="text" class="form-input" id="ledgerKeyword" value="${filters.keyword || ''}" placeholder="🔍 搜索宠物/宠主/单号/备注" style="font-size:12px; height:32px; padding-left: 32px;">
+                        </div>
+                        <button class="btn btn-primary" id="exportLedgerBtn" style="font-size:12px; height:32px; padding:0 14px;">📊 导出</button>
+                    </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
                         <select class="form-input" id="ledgerTypeFilter" style="font-size:12px; height:32px;">
                             <option value="">全部类型</option>
@@ -395,8 +401,47 @@ const BatchModule = {
         if (startInp) startInp.onchange = (e) => { this.ledgerFilters.startDate = e.target.value; this.renderBatchDetail(batchId); };
         const endInp = document.getElementById('ledgerEndDate');
         if (endInp) endInp.onchange = (e) => { this.ledgerFilters.endDate = e.target.value; this.renderBatchDetail(batchId); };
+        const kwInp = document.getElementById('ledgerKeyword');
+        if (kwInp) {
+            kwInp.oninput = (e) => { this.ledgerFilters.keyword = e.target.value; };
+            kwInp.onkeyup = (e) => {
+                if (e.key === 'Enter') {
+                    this.ledgerFilters.keyword = e.target.value;
+                    this.renderBatchDetail(batchId);
+                }
+            };
+            kwInp.onblur = (e) => {
+                this.ledgerFilters.keyword = e.target.value;
+                this.renderBatchDetail(batchId);
+            };
+        }
         const resetBtn = document.getElementById('resetLedgerFilter');
-        if (resetBtn) resetBtn.onclick = () => { this.ledgerFilters = { type: '', startDate: '', endDate: '' }; this.renderBatchDetail(batchId); };
+        if (resetBtn) resetBtn.onclick = () => {
+            this.ledgerFilters = { type: '', startDate: '', endDate: '', keyword: '' };
+            this.renderBatchDetail(batchId);
+        };
+        const exportBtn = document.getElementById('exportLedgerBtn');
+        if (exportBtn) exportBtn.onclick = () => this.exportLedgerCSV(batchId);
+    },
+
+    exportLedgerCSV(batchId) {
+        const batch = DataStore.getBatch(batchId);
+        if (!batch) return;
+
+        const csv = DataStore.exportStockLedgerToCSV(batchId, this.ledgerFilters);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        const dateStr = Utils.formatDate(new Date().toISOString(), 'YYYYMMDD_HHmmss');
+        link.href = url;
+        link.download = `库存台账_${batch.vaccineName}_${batch.batchNo}_${dateStr}.csv`;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        Utils.showToast('对账单已导出', 'success');
     },
 
     jumpToRelated(type, id) {
