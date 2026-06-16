@@ -1,13 +1,20 @@
 const WaitlistModule = {
-    currentDate: '',
+    currentDetailWaitlistId: null,
 
     init() {
-        this.currentDate = Utils.getTodayStr();
         this.bindEvents();
         this.render();
     },
 
     bindEvents() {
+        document.getElementById('addWaitlistBtn').addEventListener('click', () => this.openAddModal());
+        document.getElementById('closeAddWaitlist').addEventListener('click', () => this.closeAddModal());
+        document.getElementById('cancelAddWaitlist').addEventListener('click', () => this.closeAddModal());
+        document.getElementById('confirmAddWaitlist').addEventListener('click', () => this.handleAddWaitlist());
+
+        document.getElementById('closeWaitlistDetail').addEventListener('click', () => this.closeDetailDrawer());
+        document.querySelector('#waitlistDetailDrawer .drawer-mask').addEventListener('click', () => this.closeDetailDrawer());
+
         document.querySelectorAll('#page-waitlist .tab-item').forEach(tab => {
             tab.addEventListener('click', () => {
                 document.querySelectorAll('#page-waitlist .tab-item').forEach(t => t.classList.remove('active'));
@@ -15,159 +22,427 @@ const WaitlistModule = {
                 const target = tab.dataset.tab;
                 document.querySelectorAll('#page-waitlist .tab-content').forEach(c => c.classList.remove('active'));
                 document.getElementById('tab-' + target).classList.add('active');
+                if (target === 'waitlist-notify') {
+                    this.renderNotificationList();
+                }
             });
         });
 
-        document.getElementById('waitlistDateFilter').addEventListener('change', (e) => {
-            this.currentDate = e.target.value;
-            this.renderWaitlist();
+        document.getElementById('refreshWaitlist').addEventListener('click', () => {
+            const count = DataStore.processExpiredWaitlistNotifications();
+            Utils.showToast(count > 0 ? `已处理${count}个超时补位` : '暂无超时需处理', count > 0 ? 'success' : 'info');
+            this.render();
+            ScheduleModule.render();
+            App.updateDashboardStats();
         });
-
-        document.getElementById('addWaitlistBtn').addEventListener('click', () => this.openAddModal());
-        document.getElementById('closeAddWaitlist').addEventListener('click', () => this.closeAddModal());
-        document.getElementById('cancelAddWaitlist').addEventListener('click', () => this.closeAddModal());
-        document.getElementById('confirmAddWaitlist').addEventListener('click', () => this.handleAddWaitlist());
     },
 
     render() {
-        this.renderDateFilterOptions();
-        this.renderWaitlist();
-        this.renderNotifyList();
+        this.renderWaitlistList();
+        this.populateVaccineAndDate();
     },
 
-    renderDateFilterOptions() {
-        const select = document.getElementById('waitlistDateFilter');
-        const options = [];
-        for (let i = 0; i < 7; i++) {
-            const dateStr = Utils.getDateStr(i);
-            const label = i === 0 ? `今天 (${dateStr.slice(5)})` :
-                         i === 1 ? `明天 (${dateStr.slice(5)})` :
-                         `${['周日','周一','周二','周三','周四','周五','周六'][new Date(dateStr).getDay()]} (${dateStr.slice(5)})`;
-            options.push(`<option value="${dateStr}" ${dateStr === this.currentDate ? 'selected' : ''}>${label}</option>`);
-        }
-        select.innerHTML = options.join('');
+    populateVaccineAndDate() {
+        const vaccineSelect = document.getElementById('waitlistVaccine');
+        const vaccines = [...new Set(DataStore.data.vaccineBatches.map(b => b.vaccineName))];
+        vaccineSelect.innerHTML = '<option value="">请选择疫苗</option>' +
+            vaccines.map(v => `<option value="${Utils.escapeHtml(v)}">${Utils.escapeHtml(v)}</option>`).join('');
+
+        const dateInput = document.getElementById('waitlistDate');
+        dateInput.value = Utils.getDateStr(1);
+        dateInput.min = Utils.getTodayStr();
     },
 
-    renderWaitlist() {
-        this.renderWaitlistStats();
-        this.renderWaitlistItems();
-    },
-
-    renderWaitlistStats() {
-        const entries = DataStore.getWaitlistByDate(this.currentDate);
-        const waiting = entries.filter(e => e.status === 'waiting').length;
-        const notified = entries.filter(e => e.status === 'notified').length;
-        const confirmed = entries.filter(e => e.status === 'confirmed').length;
-
-        const container = document.getElementById('waitlistStats');
-        container.innerHTML = `
-            <div class="waitlist-stat-card">
-                <div class="waitlist-stat-num">${entries.length}</div>
-                <div class="waitlist-stat-label">总候补数</div>
-            </div>
-            <div class="waitlist-stat-card">
-                <div class="waitlist-stat-num" style="color: #52c41a;">${confirmed}</div>
-                <div class="waitlist-stat-label">已确认补位</div>
-            </div>
-            <div class="waitlist-stat-card">
-                <div class="waitlist-stat-num" style="color: #fa8c16;">${waiting + notified}</div>
-                <div class="waitlist-stat-label">等待中</div>
-            </div>
-        `;
-    },
-
-    renderWaitlistItems() {
+    renderWaitlistList() {
         const container = document.getElementById('waitlistList');
-        const entries = DataStore.getWaitlistByDate(this.currentDate);
+        const waitlist = DataStore.data.waitlistEntries
+            .filter(w => w.status !== 'expired' && w.status !== 'confirmed')
+            .sort((a, b) => {
+                const statusOrder = { notified: 0, waiting: 1 };
+                if (statusOrder[a.status] !== statusOrder[b.status]) {
+                    return statusOrder[a.status] - statusOrder[b.status];
+                }
+                if (a.date !== b.date) return a.date.localeCompare(b.date);
+                return a.rank - b.rank;
+            });
 
-        if (entries.length === 0) {
+        if (waitlist.length === 0) {
             container.innerHTML = `
                 <div class="empty-tip" style="background: #fff; border-radius: 12px;">
-                    ${Utils.isToday(this.currentDate) ? '今天' : this.currentDate}暂无候补记录
+                    暂无候补登记，点击右上角添加
                 </div>
             `;
             return;
         }
 
-        container.innerHTML = entries.map(entry => {
-            const status = Utils.getWaitlistStatus(entry.status);
-            const rankClass = entry.rank <= 3 ? `rank-${entry.rank}` : '';
-            const preferredText = entry.preferredSlots && entry.preferredSlots.length > 0 
-                ? `期望时段：${entry.preferredSlots.join('、')}` 
-                : '期望时段：全天可约';
+        const grouped = {};
+        waitlist.forEach(entry => {
+            const key = `${entry.vaccineName}_${entry.date}`;
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(entry);
+        });
 
-            let actionHtml = '';
-            if (entry.status === 'notified') {
-                actionHtml = `
-                    <div class="waitlist-action">
-                        <button class="btn btn-primary btn-sm" onclick="WaitlistModule.confirmEntry('${entry.id}')">确认补位</button>
-                    </div>
-                `;
-            } else if (entry.status === 'waiting') {
-                actionHtml = `
-                    <div class="waitlist-action">
-                        <button class="btn btn-default btn-sm" onclick="WaitlistModule.cancelEntry('${entry.id}')">取消</button>
-                    </div>
-                `;
-            }
+        let html = '';
+        for (const key in grouped) {
+            const entries = grouped[key];
+            const first = entries[0];
 
-            return `
-                <div class="waitlist-item">
-                    <div class="waitlist-rank ${rankClass}">${entry.rank}</div>
-                    <div class="waitlist-info">
-                        <div class="waitlist-main">
-                            <span class="waitlist-pet">${Utils.getPetEmoji(entry.petType)} ${Utils.escapeHtml(entry.petName)}</span>
-                            <span class="waitlist-vaccine">${Utils.escapeHtml(entry.vaccineName)}</span>
-                        </div>
-                        <div class="waitlist-desc">
-                            ${Utils.escapeHtml(entry.ownerName)} · ${Utils.maskPhone(entry.ownerPhone)}
-                        </div>
-                        <div class="waitlist-desc" style="margin-top: 2px;">
-                            ${preferredText}
-                            ${entry.assignedSlot ? ` → <span style="color:#1677ff;font-weight:500;">已匹配:${entry.assignedSlot}</span>` : ''}
-                        </div>
-                        ${entry.notifiedAt ? `
-                        <div class="waitlist-desc" style="color: #1677ff; margin-top: 2px;">
-                            📨 补位通知于 ${Utils.formatDate(entry.notifiedAt, 'HH:mm')} 推送
-                        </div>
-                        ` : ''}
+            const batchAvailable = DataStore.getAvailableBatchesForVaccine(first.vaccineName).length > 0;
+
+            html += `
+                <div class="waitlist-group">
+                    <div class="waitlist-group-header">
+                        <span class="waitlist-group-title">
+                            💉 ${Utils.escapeHtml(first.vaccineName)}
+                        </span>
+                        <span class="waitlist-group-date">
+                            ${Utils.getRelativeDateStr(first.date)} · ${entries.length}人候补
+                        </span>
                     </div>
-                    <span class="waitlist-status-tag ${status.class}">${status.text}</span>
-                    ${actionHtml}
+                    <div style="font-size: 12px; color: ${batchAvailable ? '#52c41a' : '#ff4d4f'}; margin-bottom: 10px;">
+                        ${batchAvailable ? '✓ 有可用批次库存' : '⚠️ 暂无可用批次库存，需等待补货'}
+                    </div>
+                    ${entries.map(entry => this.renderWaitlistItem(entry)).join('')}
                 </div>
             `;
-        }).join('');
+        }
+
+        container.innerHTML = html;
+
+        container.querySelectorAll('.waitlist-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const entryId = item.dataset.entryId;
+                this.showDetail(entryId);
+            });
+        });
     },
 
-    renderNotifyList() {
+    renderWaitlistItem(entry) {
+        const statusInfo = this.getWaitlistStatusDisplay(entry.status);
+        const isNotified = entry.status === 'notified';
+
+        let extraInfo = '';
+        if (isNotified && entry.notifiedAt) {
+            const now = new Date();
+            const notified = new Date(entry.notifiedAt);
+            const timeoutMs = (entry.notifyExpireMinutes || 15) * 60 * 1000;
+            const remainMs = timeoutMs - (now - notified);
+            if (remainMs > 0) {
+                const remainMin = Math.ceil(remainMs / 60000);
+                extraInfo = `<span style="color:#ff4d4f; font-size:11px;">⏳ ${remainMin}分钟后超时</span>`;
+            } else {
+                extraInfo = `<span style="color:#999; font-size:11px;">即将超时</span>`;
+            }
+        }
+
+        return `
+            <div class="waitlist-item" data-entry-id="${entry.id}">
+                <div class="waitlist-position">${entry.rank}</div>
+                <div class="waitlist-info">
+                    <div class="waitlist-pet">
+                        ${Utils.getPetEmoji(entry.petType)} ${Utils.escapeHtml(entry.petName)}
+                    </div>
+                    <div class="waitlist-owner">
+                        ${Utils.escapeHtml(entry.ownerName)} · ${Utils.maskPhone(entry.ownerPhone)}
+                    </div>
+                </div>
+                <div style="text-align: right;">
+                    <span class="waitlist-status ${statusInfo.class}">${statusInfo.text}</span>
+                    <div style="margin-top: 4px;">${extraInfo}</div>
+                </div>
+            </div>
+        `;
+    },
+
+    getWaitlistStatusDisplay(status) {
+        const map = {
+            waiting: { text: '候补中', class: 'status-waiting' },
+            notified: { text: '已通知补位', class: 'status-notified' },
+            confirmed: { text: '已确认', class: 'status-confirmed' },
+            expired: { text: '已过期', class: 'status-expired' }
+        };
+        return map[status] || { text: status, class: 'status-expired' };
+    },
+
+    getNotifStatusDisplay(status) {
+        const map = {
+            pending_confirm: { text: '等待确认', color: '#1677ff' },
+            confirmed: { text: '已确认', color: '#52c41a' },
+            timeout: { text: '已超时', color: '#ff4d4f' },
+            skipped: { text: '已跳过', color: '#999' },
+            cancelled: { text: '已取消', color: '#999' }
+        };
+        return map[status] || { text: status, color: '#999' };
+    },
+
+    getNotifCauseDisplay(reason) {
+        const map = {
+            '时段释放': '⏰ 超时释放补位',
+            '原预约取消释放': '↩️ 预约取消补位'
+        };
+        return map[reason] || '🔔 补位通知';
+    },
+
+    openAddModal() {
+        document.getElementById('addWaitlistForm').reset();
+        this.populateVaccineAndDate();
+        document.getElementById('addWaitlistModal').classList.add('active');
+    },
+
+    closeAddModal() {
+        document.getElementById('addWaitlistModal').classList.remove('active');
+    },
+
+    handleAddWaitlist() {
+        const form = document.getElementById('addWaitlistForm');
+        const vaccineName = form.waitlistVaccine.value;
+        const date = form.waitlistDate.value;
+        const petName = form.waitlistPetName.value.trim();
+        const petType = form.waitlistPetType.value;
+        const ownerName = form.waitlistOwnerName.value.trim();
+        const ownerPhone = form.waitlistOwnerPhone.value.trim();
+        const remark = form.waitlistRemark.value.trim();
+
+        if (!vaccineName) { Utils.showToast('请选择疫苗', 'error'); return; }
+        if (!date) { Utils.showToast('请选择日期', 'error'); return; }
+        if (!petName) { Utils.showToast('请输入宠物名', 'error'); return; }
+        if (!petType) { Utils.showToast('请选择宠物类型', 'error'); return; }
+        if (!ownerName) { Utils.showToast('请输入宠主姓名', 'error'); return; }
+        if (!ownerPhone || !Utils.validatePhone(ownerPhone)) {
+            Utils.showToast('请输入正确的手机号', 'error');
+            return;
+        }
+
+        const availableBatches = DataStore.getAvailableBatchesForVaccine(vaccineName);
+        const hasStock = availableBatches.length > 0;
+
+        DataStore.addWaitlistEntry({
+            vaccineName,
+            date,
+            petName,
+            petType,
+            ownerName,
+            ownerPhone,
+            remark,
+            preferredSlots: []
+        });
+
+        if (!hasStock) {
+            Utils.showToast('候补登记成功（暂无可用库存，有货后优先通知）', 'info', 3000);
+        } else {
+            Utils.showToast('候补登记成功', 'success');
+        }
+
+        this.closeAddModal();
+        this.render();
+        App.updateDashboardStats();
+    },
+
+    showDetail(entryId) {
+        this.currentDetailWaitlistId = entryId;
+        const entry = DataStore.data.waitlistEntries.find(w => w.id === entryId);
+        if (!entry) return;
+
+        const statusInfo = this.getWaitlistStatusDisplay(entry.status);
+
+        const notifications = DataStore.data.waitlistNotifications
+            .filter(n => n.waitlistId === entryId)
+            .sort((a, b) => new Date(b.notifiedAt || b.createdAt) - new Date(a.notifiedAt || a.createdAt));
+
+        const content = document.getElementById('waitlistDetailContent');
+
+        let notifHtml = '';
+        if (notifications.length === 0) {
+            notifHtml = '<div style="text-align: center; padding: 20px; color: #999; font-size: 13px;">暂无补位通知记录</div>';
+        } else {
+            notifHtml = notifications.map(n => {
+                const statusDisplay = this.getNotifStatusDisplay(n.status);
+                const causeLabel = this.getNotifCauseDisplay(n.reason);
+
+                let relationText = '';
+                if (n.expiredBy) {
+                    const prevEntry = DataStore.data.waitlistEntries.find(w => w.id === n.expiredBy);
+                    relationText = prevEntry 
+                        ? `<div class="record-desc" style="color:#ff4d4f; margin-top:4px;">因 ${Utils.escapeHtml(prevEntry.petName)} 超时顺延</div>`
+                        : '';
+                }
+                if (n.followedBy) {
+                    const nextEntry = DataStore.data.waitlistEntries.find(w => w.id === n.followedBy);
+                    relationText = nextEntry
+                        ? `<div class="record-desc" style="color:#fa8c16; margin-top:4px;">超时后顺延给 ${Utils.escapeHtml(nextEntry.petName)}</div>`
+                        : '';
+                }
+
+                return `
+                    <div class="record-item">
+                        <div class="record-header">
+                            <span class="record-title">${causeLabel}</span>
+                            <span style="font-size:11px; padding:2px 8px; border-radius:4px; background:${statusDisplay.color}15; color:${statusDisplay.color};">${statusDisplay.text}</span>
+                        </div>
+                        <div class="record-desc">
+                            通知时间：${Utils.formatDate(n.notifiedAt || n.createdAt, 'MM-DD HH:mm')}
+                        </div>
+                        ${n.timeSlot ? `
+                            <div class="record-desc">
+                                补位时段：${n.timeSlot}
+                            </div>
+                        ` : ''}
+                        ${relationText}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        const batchAvailable = DataStore.getAvailableBatchesForVaccine(entry.vaccineName).length > 0;
+
+        content.innerHTML = `
+            <div class="detail-section">
+                <div class="detail-grid">
+                    <div class="detail-item full">
+                        <div class="detail-label">疫苗</div>
+                        <div class="detail-value">
+                            ${Utils.escapeHtml(entry.vaccineName)}
+                            ${batchAvailable 
+                                ? '<span style="color:#52c41a; font-size:12px; margin-left:8px;">✓ 有库存</span>' 
+                                : '<span style="color:#ff4d4f; font-size:12px; margin-left:8px;">⚠️ 无库存</span>'}
+                        </div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">候补日期</div>
+                        <div class="detail-value">${entry.date}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">排队位置</div>
+                        <div class="detail-value">#${entry.rank}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">状态</div>
+                        <div class="detail-value"><span class="${statusInfo.class}" style="padding:2px 8px; border-radius:4px; font-size:12px;">${statusInfo.text}</span></div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">宠物</div>
+                        <div class="detail-value">${Utils.getPetEmoji(entry.petType)} ${Utils.escapeHtml(entry.petName)}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">宠主</div>
+                        <div class="detail-value">${Utils.escapeHtml(entry.ownerName)}</div>
+                    </div>
+                    <div class="detail-item full">
+                        <div class="detail-label">手机号</div>
+                        <div class="detail-value">${Utils.maskPhone(entry.ownerPhone)}</div>
+                    </div>
+                    ${entry.remark ? `
+                    <div class="detail-item full">
+                        <div class="detail-label">备注</div>
+                        <div class="detail-value">${Utils.escapeHtml(entry.remark)}</div>
+                    </div>
+                    ` : ''}
+                    ${entry.assignedSlot ? `
+                    <div class="detail-item full">
+                        <div class="detail-label">已分配时段</div>
+                        <div class="detail-value" style="color:#1677ff; font-weight:500;">${entry.assignedSlot}</div>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>
+
+            <div class="detail-section">
+                <div class="detail-section-title">补位通知记录</div>
+                <div class="detail-item-list">
+                    ${notifHtml}
+                </div>
+            </div>
+
+            ${entry.status === 'waiting' ? `
+                <div class="action-group">
+                    <button class="btn btn-outline btn-block" style="color: #ff4d4f;" onclick="WaitlistModule.cancelWaitlist('${entry.id}')">
+                        取消候补
+                    </button>
+                </div>
+            ` : ''}
+
+            ${entry.status === 'notified' ? `
+                <div class="action-group">
+                    <button class="btn btn-primary btn-block" onclick="WaitlistModule.confirmWaitlist('${entry.id}')">
+                        ✓ 确认补位（生成预约）
+                    </button>
+                    <button class="btn btn-outline btn-block" style="margin-top: 8px;" onclick="WaitlistModule.skipWaitlist('${entry.id}')">
+                        跳过，通知下一位
+                    </button>
+                </div>
+            ` : ''}
+        `;
+
+        document.getElementById('waitlistDetailDrawer').classList.add('active');
+    },
+
+    closeDetailDrawer() {
+        this.currentDetailWaitlistId = null;
+        document.getElementById('waitlistDetailDrawer').classList.remove('active');
+    },
+
+    confirmWaitlist(entryId) {
+        const entry = DataStore.data.waitlistEntries.find(w => w.id === entryId);
+        if (!entry) return;
+
+        const availableBatches = DataStore.getAvailableBatchesForVaccine(entry.vaccineName);
+        if (availableBatches.length === 0) {
+            Utils.showToast('⚠️ 该疫苗暂无可用批次库存，无法生成预约', 'error', 3000);
+            return;
+        }
+
+        const result = DataStore.confirmWaitlistEntry(entryId);
+
+        if (result.success) {
+            Utils.showToast(`补位成功，已生成预约（${result.data.timeSlot}）`, 'success', 2500);
+            this.closeDetailDrawer();
+            this.render();
+            ScheduleModule.render();
+            BatchModule.render();
+            App.updateDashboardStats();
+        } else {
+            if (result.type === 'no_stock') {
+                Utils.showToast('⚠️ 无可用疫苗库存，请等待补货', 'error', 3000);
+            } else if (result.type === 'slot_full') {
+                Utils.showToast('⚠️ 时段已满员，无法补位', 'error', 2500);
+            } else {
+                Utils.showToast(result.message || '补位失败', 'error');
+            }
+        }
+    },
+
+    skipWaitlist(entryId) {
+        const entry = DataStore.data.waitlistEntries.find(w => w.id === entryId);
+        if (!entry) return;
+
+        const result = DataStore.skipWaitlistEntry(entryId);
+        if (result) {
+            Utils.showToast('已跳过，正在通知下一位', 'success');
+            this.closeDetailDrawer();
+            this.render();
+            ScheduleModule.render();
+            App.updateDashboardStats();
+        } else {
+            Utils.showToast('操作失败', 'error');
+        }
+    },
+
+    cancelWaitlist(entryId) {
+        if (!confirm('确定取消该候补登记吗？')) return;
+
+        DataStore.cancelWaitlistEntry(entryId);
+        Utils.showToast('已取消候补', 'success');
+        this.closeDetailDrawer();
+        this.render();
+        App.updateDashboardStats();
+    },
+
+    renderNotificationList() {
         const container = document.getElementById('notifyList');
-        const notifyRecords = [];
+        const notifications = DataStore.data.waitlistNotifications
+            .sort((a, b) => new Date(b.notifiedAt || b.createdAt) - new Date(a.notifiedAt || a.createdAt));
 
-        DataStore.data.notifications.filter(n => n.type === 'waitlist').forEach(n => {
-            notifyRecords.push({
-                id: n.id,
-                type: 'waitlist',
-                title: '补位通知',
-                content: n.content,
-                time: n.createdAt,
-                status: n.read ? 'success' : 'pending'
-            });
-        });
-
-        DataStore.data.waitlistEntries.filter(e => e.status === 'confirmed' && e.confirmedAt).forEach(e => {
-            notifyRecords.push({
-                id: `confirm-${e.id}`,
-                type: 'confirm',
-                title: '补位确认',
-                content: `${e.petName}（宠主：${e.ownerName}）已确认补位至 ${e.date} ${e.assignedSlot || '指定时段'}，预约已生成。`,
-                time: e.confirmedAt,
-                status: 'success'
-            });
-        });
-
-        notifyRecords.sort((a, b) => new Date(b.time) - new Date(a.time));
-
-        if (notifyRecords.length === 0) {
+        if (notifications.length === 0) {
             container.innerHTML = `
                 <div class="empty-tip" style="background: #fff; border-radius: 12px;">
                     暂无补位通知记录
@@ -176,170 +451,36 @@ const WaitlistModule = {
             return;
         }
 
-        container.innerHTML = notifyRecords.slice(0, 50).map(r => {
-            const iconMap = {
-                waitlist: { icon: '🔔', name: '补位推送' },
-                confirm: { icon: '✅', name: '补位确认' }
-            };
-            const info = iconMap[r.type] || { icon: '📨', name: '通知' };
-            const statusClass = r.status === 'success' ? 'notify-success' : (r.status === 'pending' ? 'notify-pending' : 'notify-failed');
-            const statusMap = {
-                success: { text: '成功', class: 'success' },
-                pending: { text: '待确认', class: '' },
-                failed: { text: '失败', class: 'expired' }
-            };
-            const s = statusMap[r.status] || statusMap.success;
+        container.innerHTML = notifications.map(n => {
+            const entry = DataStore.data.waitlistEntries.find(w => w.id === n.waitlistId);
+            const statusDisplay = this.getNotifStatusDisplay(n.status);
+            const causeLabel = this.getNotifCauseDisplay(n.reason);
+
+            let relation = '';
+            if (n.expiredBy) {
+                const prev = DataStore.data.waitlistEntries.find(w => w.id === n.expiredBy);
+                if (prev) relation = `因 ${Utils.escapeHtml(prev.petName)} 超时顺延`;
+            }
+            if (n.followedBy) {
+                const next = DataStore.data.waitlistEntries.find(w => w.id === n.followedBy);
+                if (next) relation = `超时后顺延给 ${Utils.escapeHtml(next.petName)}`;
+            }
 
             return `
-                <div class="notify-card ${statusClass}">
-                    <div class="notify-header">
-                        <span class="notify-type">
-                            ${info.icon} ${info.name}
-                        </span>
-                        <span class="notify-status status-${s.class}">${s.text}</span>
+                <div class="record-item" style="background:#fff; border-radius:8px; padding:12px 14px; margin-bottom:8px; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+                    <div class="record-header">
+                        <span class="record-title">${causeLabel}</span>
+                        <span style="font-size:11px; padding:2px 8px; border-radius:4px; background:${statusDisplay.color}15; color:${statusDisplay.color};">${statusDisplay.text}</span>
                     </div>
-                    <div class="notify-content">${Utils.escapeHtml(r.content)}</div>
-                    <div class="notify-meta">
-                        <span>${Utils.formatDate(r.time, 'YYYY-MM-DD HH:mm')}</span>
+                    <div class="record-desc" style="margin-top:4px;">
+                        ${entry ? `${Utils.getPetEmoji(entry.petType)} ${Utils.escapeHtml(entry.petName)} · ${Utils.escapeHtml(entry.vaccineName)}` : '候补记录'}
                     </div>
+                    <div class="record-desc">
+                        ${n.date} ${n.timeSlot || ''} · ${Utils.formatDate(n.notifiedAt || n.createdAt, 'HH:mm')}
+                    </div>
+                    ${relation ? `<div class="record-desc" style="color:${statusDisplay.color};">${relation}</div>` : ''}
                 </div>
             `;
         }).join('');
-    },
-
-    openAddModal() {
-        const form = document.getElementById('addWaitlistForm');
-        form.reset();
-        form.waitlistDate.value = this.currentDate;
-        this.renderTimeSlotCheckboxes();
-        this.renderVaccineSelectOptions();
-        document.getElementById('addWaitlistModal').classList.add('active');
-    },
-
-    closeAddModal() {
-        document.getElementById('addWaitlistModal').classList.remove('active');
-    },
-
-    renderTimeSlotCheckboxes() {
-        const container = document.getElementById('waitlistTimeSlots');
-        const slots = Utils.generateTimeSlots();
-        container.innerHTML = slots.map(s => `
-            <label class="checkbox-item" onclick="this.classList.toggle('checked'); this.querySelector('input').checked = !this.querySelector('input').checked;">
-                <input type="checkbox" name="preferredSlots" value="${s}">
-                <span>${s}</span>
-            </label>
-        `).join('');
-    },
-
-    renderVaccineSelectOptions() {
-        const select = document.getElementById('waitlistVaccine');
-        const vaccineTypes = [...new Set(DataStore.data.vaccineBatches.map(b => b.vaccineName))];
-        select.innerHTML = '<option value="">请选择疫苗</option>' +
-            vaccineTypes.map(v => `<option value="${v}">${v}</option>`).join('');
-    },
-
-    handleAddWaitlist() {
-        const form = document.getElementById('addWaitlistForm');
-        const date = form.waitlistDate.value;
-        const petName = form.waitlistPetName.value.trim();
-        const petType = form.waitlistPetType.value;
-        const ownerName = form.waitlistOwnerName.value.trim();
-        const ownerPhone = form.waitlistOwnerPhone.value.trim();
-        const vaccineName = form.waitlistVaccine.value;
-        const expiryDays = parseInt(form.waitlistExpire.value);
-
-        const preferredChecks = form.querySelectorAll('input[name="preferredSlots"]:checked');
-        const preferredSlots = Array.from(preferredChecks).map(c => c.value);
-
-        if (!date) { Utils.showToast('请选择候补日期', 'error'); return; }
-        if (!petName) { Utils.showToast('请输入宠物昵称', 'error'); return; }
-        if (!ownerName) { Utils.showToast('请输入宠主姓名', 'error'); return; }
-        if (!ownerPhone) { Utils.showToast('请输入联系电话', 'error'); return; }
-        if (!Utils.validatePhone(ownerPhone)) { Utils.showToast('请输入正确的手机号', 'error'); return; }
-        if (!vaccineName) { Utils.showToast('请选择接种疫苗', 'error'); return; }
-
-        const entry = DataStore.addWaitlistEntry({
-            date,
-            preferredSlots,
-            petName,
-            petType,
-            ownerName,
-            ownerPhone,
-            vaccineName,
-            expiryDays
-        });
-
-        DataStore.addNotification({
-            type: 'system',
-            title: '候补登记成功',
-            content: `${ownerName}的${petName}已加入${date}候补队列，当前排名第${entry.rank}位，有空闲时段将自动通知。`
-        });
-
-        Utils.showToast(`候补成功，当前排名第${entry.rank}位`, 'success');
-        this.closeAddModal();
-        this.render();
-        App.updateDashboardStats();
-    },
-
-    confirmEntry(entryId) {
-        const success = DataStore.confirmWaitlistEntry(entryId);
-        if (success) {
-            Utils.showToast('补位已确认，预约已生成', 'success');
-            this.render();
-            ScheduleModule.render();
-            App.updateDashboardStats();
-        } else {
-            Utils.showToast('确认失败，请刷新后重试', 'error');
-        }
-    },
-
-    cancelEntry(entryId) {
-        if (!confirm('确定取消该候补登记吗？')) return;
-
-        const entry = DataStore.data.waitlistEntries.find(e => e.id === entryId);
-        if (entry) {
-            DataStore.data.waitlistEntries
-                .filter(e => e.date === entry.date && e.rank > entry.rank && e.status === 'waiting')
-                .forEach(e => e.rank--);
-
-            DataStore.data.waitlistEntries = DataStore.data.waitlistEntries.filter(e => e.id !== entryId);
-            DataStore.save();
-
-            Utils.showToast('已取消候补', 'success');
-            this.render();
-            App.updateDashboardStats();
-        }
-    },
-
-    simulateAutoFill() {
-        const today = Utils.getTodayStr();
-        const slots = DataStore.data.timeSlots[today] || [];
-        const fullSlots = slots.filter(s => s.booked >= s.capacity);
-        if (fullSlots.length === 0) {
-            Utils.showToast('当前没有约满的时段', 'info');
-            return;
-        }
-
-        const targetSlot = fullSlots[0];
-        const appointments = DataStore.getAppointmentsBySlot(today, targetSlot.time);
-        if (appointments.length === 0) return;
-
-        const apt = appointments[0];
-        if (apt.status === 'confirmed') {
-            apt.status = 'timeout';
-            apt.timeoutMinutes = 35;
-            const filled = DataStore.tryFillFromWaitlist(today, targetSlot.time);
-            DataStore.recalculateSlotBookings();
-            DataStore.save();
-
-            if (filled) {
-                Utils.showToast(`模拟超时：${apt.timeSlot}释放，候补第${filled.rank}位${filled.petName}已通知补位`, 'success');
-            } else {
-                Utils.showToast(`模拟超时：${apt.timeSlot}释放，但暂无可候补人员`, 'info');
-            }
-            this.render();
-            ScheduleModule.render();
-            App.updateDashboardStats();
-        }
     }
 };

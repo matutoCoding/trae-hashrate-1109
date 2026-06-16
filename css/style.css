@@ -1770,3 +1770,318 @@ html, body {
     font-size: 12px;
     color: #999;
 }
+
+/* ========== 候补分组 ========== */
+.waitlist-group {
+    background: #fff;
+    border-radius: 12px;
+    margin-bottom: 12px;
+    padding: 14px 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.waitlist-group-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #f5f5f5;
+}
+
+.waitlist-group-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+}
+
+.waitlist-group-date {
+    font-size: 12px;
+    color: #999;
+}
+
+.waitlist-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #f5f5f5;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.waitlist-item:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.waitlist-item:active {
+    background: #fafafa;
+}
+
+.waitlist-position {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #f0f5ff;
+    color: #1677ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 13px;
+    margin-right: 12px;
+    flex-shrink: 0;
+}
+
+.waitlist-status {
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+}
+
+/* ========== 召回汇总条 ========== */
+.recall-summary {
+    background: linear-gradient(135deg, #fff1f0 0%, #ffccc7 100%);
+    border: 1px solid #ffa39e;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+}
+
+/* ========== 批次流向追踪 ========== */
+.trace-batch-info {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.trace-stats {
+    display: flex;
+    justify-content: space-around;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid #f0f0f0;
+}
+
+.trace-stat {
+    text-align: center;
+}
+
+.trace-stat-num {
+    font-size: 20px;
+    font-weight: 600;
+    color: #333;
+    display: block;
+}
+
+.trace-stat-label {
+    font-size: 11px;
+    color: #999;
+    margin-top: 2px;
+}
+
+/* ========== 接种列表 ========== */
+.vaccination-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.vaccination-item {
+    display: flex;
+    align-items: center;
+    background: #fff;
+    border-radius: 10px;
+    padding: 12px 14px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+}
+
+.vaccination-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #f0f5ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    margin-right: 12px;
+    flex-shrink: 0;
+}
+
+.vaccination-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.vaccination-main {
+    display: flex;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.vaccination-pet {
+    font-size: 14px;
+    font-weight: 500;
+    color: #333;
+    margin-right: 8px;
+}
+
+.vaccination-type {
+    font-size: 11px;
+    padding: 1px 6px;
+    background: #e6f7ff;
+    border-radius: 4px;
+    color: #1677ff;
+}
+
+.vaccination-owner {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 2px;
+}
+
+.vaccination-date {
+    font-size: 11px;
+    color: #999;
+}
+
+.vaccination-status {
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+.status-done { background: #f6ffed; color: #52c41a; }
+.status-recalled { background: #fff1f0; color: #ff4d4f; }
+
+/* ========== 召回卡片新增 ========== */
+.recall-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid #f5f5f5;
+    font-size: 12px;
+    color: #999;
+}
+
+.recall-stats {
+    display: flex;
+    gap: 16px;
+}
+
+.recall-stat-item {
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
+    font-size: 12px;
+    color: #999;
+}
+
+.recall-stat-num {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+/* ========== 宠物状态选择器 ========== */
+.pet-status-selector {
+    min-width: 0;
+}
+
+.pet-status-selector select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23999' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 24px;
+    cursor: pointer;
+}
+
+/* ========== 库存台账 ========== */
+.ledger-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.ledger-stat-item {
+    background: #fafafa;
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+
+.ledger-stat-label {
+    font-size: 11px;
+    color: #999;
+    margin-bottom: 4px;
+}
+
+.ledger-stat-value {
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+}
+
+.ledger-stat-value.positive { color: #52c41a; }
+.ledger-stat-value.negative { color: #ff4d4f; }
+.ledger-stat-value.frozen { color: #fa8c16; }
+
+.ledger-list {
+    background: #fafafa;
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+
+.ledger-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.ledger-item:last-child { border-bottom: none; }
+
+.ledger-info { flex: 1; min-width: 0; }
+
+.ledger-type {
+    font-size: 13px;
+    font-weight: 500;
+    color: #333;
+    margin-bottom: 3px;
+}
+
+.ledger-desc {
+    font-size: 11px;
+    color: #999;
+    line-height: 1.4;
+}
+
+.ledger-qty {
+    text-align: right;
+    flex-shrink: 0;
+    margin-left: 10px;
+}
+
+.ledger-qty-change {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.ledger-qty-change.in { color: #52c41a; }
+.ledger-qty-change.out { color: #ff4d4f; }
+.ledger-qty-change.freeze { color: #fa8c16; }
+.ledger-qty-change.neutral { color: #999; }
+
+.ledger-qty-balance {
+    font-size: 11px;
+    color: #999;
+    margin-top: 2px;
+}

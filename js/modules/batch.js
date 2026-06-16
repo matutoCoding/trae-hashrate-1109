@@ -11,7 +11,7 @@ const BatchModule = {
         document.getElementById('confirmAddBatch').addEventListener('click', () => this.handleAddBatch());
         document.getElementById('closeBatchDetail').addEventListener('click', () => this.closeDetailDrawer());
         document.querySelector('#batchDetailDrawer .drawer-mask').addEventListener('click', () => this.closeDetailDrawer());
-        
+
         document.getElementById('batchSearch').addEventListener('input', Utils.debounce((e) => {
             this.render(e.target.value);
         }, 200));
@@ -23,7 +23,7 @@ const BatchModule = {
 
         if (keyword.trim()) {
             const kw = keyword.trim().toLowerCase();
-            batches = batches.filter(b => 
+            batches = batches.filter(b =>
                 b.vaccineName.toLowerCase().includes(kw) ||
                 b.batchNo.toLowerCase().includes(kw) ||
                 (b.manufacturer || '').toLowerCase().includes(kw)
@@ -53,7 +53,17 @@ const BatchModule = {
         const status = Utils.getBatchStatus(batch);
         const percent = Utils.getStockPercent(batch);
         const barClass = Utils.getStockBarClass(percent);
-        const remaining = batch.stockQty - (batch.usedQty || 0);
+        const remaining = batch.availableQty || 0;
+        const reserved = batch.reservedQty || 0;
+        const frozen = batch.frozenQty || 0;
+
+        let extraInfo = '';
+        if (reserved > 0 || frozen > 0) {
+            const parts = [];
+            if (reserved > 0) parts.push(`预约占用${reserved}`);
+            if (frozen > 0) parts.push(`召回冻结${frozen}`);
+            extraInfo = `<div style="font-size: 11px; color: #fa8c16; margin-top: 2px;">（${parts.join(' / ')}）</div>`;
+        }
 
         return `
             <div class="batch-card" data-batch-id="${batch.id}">
@@ -82,12 +92,13 @@ const BatchModule = {
                 </div>
                 <div class="batch-stock-bar">
                     <div class="stock-bar-header">
-                        <span class="stock-bar-label">使用进度</span>
-                        <span class="stock-bar-value">${batch.usedQty || 0}/${batch.stockQty}（剩${remaining}剂）</span>
+                        <span class="stock-bar-label">可用库存</span>
+                        <span class="stock-bar-value">${remaining}/${batch.stockQty} 剂</span>
                     </div>
                     <div class="stock-bar">
-                        <div class="stock-bar-fill ${barClass}" style="width: ${percent}%"></div>
+                        <div class="stock-bar-fill ${barClass}" style="width: ${Math.min(percent, 100)}%"></div>
                     </div>
+                    ${extraInfo}
                 </div>
             </div>
         `;
@@ -151,7 +162,11 @@ const BatchModule = {
         const records = DataStore.getRecordsByBatchId(batchId);
         const percent = Utils.getStockPercent(batch);
         const barClass = Utils.getStockBarClass(percent);
-        const remaining = batch.stockQty - (batch.usedQty || 0);
+        const remaining = batch.availableQty || 0;
+        const reserved = batch.reservedQty || 0;
+        const frozen = batch.frozenQty || 0;
+        const used = batch.usedQty || 0;
+        const ledger = DataStore.getStockLedgerByBatch(batchId);
 
         const content = document.getElementById('batchDetailContent');
         content.innerHTML = `
@@ -181,36 +196,9 @@ const BatchModule = {
                         <div class="detail-label">有效期至</div>
                         <div class="detail-value ${status.class.includes('expire') || status.class.includes('warning') ? 'highlight' : ''}">${Utils.escapeHtml(batch.expireDate)}</div>
                     </div>
-                    <div class="detail-item">
-                        <div class="detail-label">入库数量</div>
-                        <div class="detail-value">${batch.stockQty} 剂</div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">已使用</div>
-                        <div class="detail-value">${batch.usedQty || 0} 剂</div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">剩余库存</div>
-                        <div class="detail-value ${remaining < 10 ? 'warning' : 'success'}">${remaining} 剂</div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">单价</div>
-                        <div class="detail-value">${batch.price ? '¥' + batch.price : '-'}</div>
-                    </div>
                     <div class="detail-item full">
                         <div class="detail-label">存储条件</div>
                         <div class="detail-value">${Utils.escapeHtml(batch.storageCondition || '-')}</div>
-                    </div>
-                    <div class="detail-item full">
-                        <div class="detail-label">使用进度</div>
-                        <div style="margin-top: 8px;">
-                            <div class="stock-bar-header" style="margin-bottom: 6px;">
-                                <span class="stock-bar-value">${percent}%</span>
-                            </div>
-                            <div class="stock-bar" style="height: 8px;">
-                                <div class="stock-bar-fill ${barClass}" style="width: ${percent}%"></div>
-                            </div>
-                        </div>
                     </div>
                     ${batch.remark ? `
                     <div class="detail-item full">
@@ -219,6 +207,66 @@ const BatchModule = {
                     </div>
                     ` : ''}
                 </div>
+            </div>
+
+            <div class="detail-section">
+                <div class="detail-section-title">库存台账</div>
+                <div class="detail-grid">
+                    <div class="detail-item">
+                        <div class="detail-label">总入库量</div>
+                        <div class="detail-value" style="color: #52c41a;">${batch.stockQty} 剂</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">已接种</div>
+                        <div class="detail-value">${used} 剂</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">预约占用</div>
+                        <div class="detail-value" style="color: #1677ff;">${reserved} 剂</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">召回冻结</div>
+                        <div class="detail-value" style="color: #ff4d4f;">${frozen} 剂</div>
+                    </div>
+                    <div class="detail-item full">
+                        <div class="detail-label">当前可用</div>
+                        <div class="detail-value" style="font-size: 18px; color: ${remaining < 10 ? '#ff4d4f' : '#52c41a'};">${remaining} 剂</div>
+                    </div>
+                    <div class="detail-item full">
+                        <div style="margin-top: 8px;">
+                            <div class="stock-bar" style="height: 8px;">
+                                <div class="stock-bar-fill ${barClass}" style="width: ${Math.min(percent, 100)}%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="detail-section">
+                <div class="detail-section-title">库存变动流水（${ledger.length}条）</div>
+                ${ledger.length === 0 ? `
+                    <div class="empty-tip" style="padding: 30px 20px;">暂无流水记录</div>
+                ` : `
+                    <div class="detail-item-list">
+                        ${ledger.map(l => `
+                            <div class="record-item">
+                                <div class="record-header">
+                                    <span class="record-title">
+                                        <span style="color: ${l.changeQty > 0 ? '#52c41a' : '#ff4d4f'}; font-weight: 600;">
+                                            ${l.changeQty > 0 ? '+' : ''}${l.changeQty}
+                                        </span>
+                                        <span style="margin-left: 8px; font-weight: normal;">${l.typeLabel}</span>
+                                    </span>
+                                    <span style="font-size: 12px; color: #999;">
+                                        余${l.afterQty}剂
+                                    </span>
+                                </div>
+                                <div class="record-desc">${Utils.escapeHtml(l.remark)}</div>
+                                <div class="record-desc">${Utils.formatDate(l.createdAt, 'YYYY-MM-DD HH:mm')}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `}
             </div>
 
             <div class="detail-section">
@@ -236,7 +284,7 @@ const BatchModule = {
                                             ${Utils.escapeHtml(r.petType)}
                                         </span>
                                     </span>
-                                    <span class="appointment-tag status-${r.status === 'done' ? 'completed' : 'cancelled'}">
+                                    <span class="appointment-tag ${r.status === 'done' ? 'status-completed' : 'status-cancelled'}">
                                         ${r.status === 'done' ? '正常' : '已召回'}
                                     </span>
                                 </div>

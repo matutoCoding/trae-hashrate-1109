@@ -1,5 +1,6 @@
 const RecallModule = {
     currentSearchBatchNo: '',
+    currentDetailRecallId: null,
 
     init() {
         this.bindEvents();
@@ -71,12 +72,18 @@ const RecallModule = {
         let recallInfo = '';
         const existingRecall = DataStore.data.recallRecords.find(r => r.batchNo === batchNo);
         if (existingRecall) {
+            const stats = DataStore.getRecallPetStats(existingRecall.id);
+            const pendingCount = stats.total - stats.completed;
             recallInfo = `
                 <div class="recall-summary">
                     <div style="font-weight: 600; color: #ff4d4f; margin-bottom: 6px;">⚠️ 该批次已发起召回</div>
-                    <div style="font-size: 12px; color: #666;">
+                    <div style="font-size: 12px; color: #666; margin-bottom: 6px;">
                         原因：${Utils.escapeHtml(existingRecall.reason)} · 
                         处理状态：${existingRecall.status === 'processing' ? '处理中' : (existingRecall.status === 'completed' ? '已完成' : '已取消')}
+                    </div>
+                    <div style="font-size: 12px; color: #999;">
+                        待处理 <b style="color:#ff4d4f;">${pendingCount}</b> 只 · 
+                        已完成 <b style="color:#52c41a;">${stats.completed}</b> 只
                     </div>
                 </div>
             `;
@@ -115,7 +122,7 @@ const RecallModule = {
             <div class="vaccination-list">
                 ${records.length === 0 ? `
                     <div class="empty-tip" style="padding: 40px 20px;">该批次暂无接种记录</div>
-                ` : records.map(r => this.renderVaccinationItem(r)).join('')}
+                ` : records.map(r => this.renderVaccinationItem(r, existingRecall)).join('')}
             </div>
             ${!existingRecall && records.length > 0 ? `
                 <div style="padding: 12px 16px; border-top: 1px solid #f0f0f0;">
@@ -127,7 +134,27 @@ const RecallModule = {
         `;
     },
 
-    renderVaccinationItem(record) {
+    renderVaccinationItem(record, recall) {
+        let statusTag = '';
+        if (recall) {
+            const petStatus = DataStore.getRecallPetStatus(recall.id, record.id);
+            const status = petStatus ? petStatus.status : 'pending';
+            const label = DataStore.RECALL_PET_STATUS_LABELS[status] || status;
+            const colorMap = {
+                pending: '#999',
+                notified: '#1677ff',
+                contacted: '#fa8c16',
+                reexamined: '#722ed1',
+                revaccinated: '#52c41a',
+                no_action: '#8c8c8c'
+            };
+            statusTag = `<span style="font-size:11px; padding:2px 8px; border-radius:4px; background:${colorMap[status] || '#999'}20; color:${colorMap[status] || '#999'};">${label}</span>`;
+        } else {
+            statusTag = `<span class="vaccination-status ${record.status === 'done' ? 'status-done' : 'status-recalled'}">
+                ${record.status === 'done' ? '正常' : '已召回'}
+            </span>`;
+        }
+
         return `
             <div class="vaccination-item">
                 <div class="vaccination-avatar">${Utils.getPetEmoji(record.petType)}</div>
@@ -143,9 +170,7 @@ const RecallModule = {
                         接种时间：${record.vaccinationDate} ${record.vaccinationTime}
                     </div>
                 </div>
-                <span class="vaccination-status ${record.status === 'done' ? 'status-done' : 'status-recalled'}">
-                    ${record.status === 'done' ? '正常' : '已召回'}
-                </span>
+                ${statusTag}
             </div>
         `;
     },
@@ -173,6 +198,10 @@ const RecallModule = {
 
         container.innerHTML = recalls.map(recall => {
             const level = Utils.getRecallLevel(recall.level);
+            const stats = DataStore.getRecallPetStats(recall.id);
+            const pendingCount = stats.total - stats.completed;
+            const progress = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
+
             return `
                 <div class="recall-card" data-recall-id="${recall.id}">
                     <div class="recall-header">
@@ -184,15 +213,24 @@ const RecallModule = {
                         <b style="color:#666;">原因：</b>${Utils.escapeHtml(recall.reason)}<br>
                         ${Utils.escapeHtml(recall.description)}
                     </div>
+                    <div style="margin-top: 10px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+                            <span style="color: #999;">处理进度</span>
+                            <span style="color: #666;">${stats.completed}/${stats.total}（${progress}%）</span>
+                        </div>
+                        <div class="stock-bar">
+                            <div class="stock-bar-fill bar-green" style="width: ${progress}%;"></div>
+                        </div>
+                    </div>
                     <div class="recall-footer">
                         <div class="recall-stats">
                             <span class="recall-stat-item">
-                                <span class="recall-stat-num">${recall.affectedCount}</span>
-                                受影响
+                                <span class="recall-stat-num" style="color:#ff4d4f;">${pendingCount}</span>
+                                待处理
                             </span>
                             <span class="recall-stat-item">
-                                <span class="recall-stat-num">${recall.notifiedCount}</span>
-                                已通知
+                                <span class="recall-stat-num" style="color:#52c41a;">${stats.completed}</span>
+                                已完成
                             </span>
                         </div>
                         <span>${Utils.getRelativeDateStr(recall.createdAt)}发起</span>
@@ -277,15 +315,28 @@ const RecallModule = {
     },
 
     showDetail(recallId) {
+        this.currentDetailRecallId = recallId;
         const recall = DataStore.data.recallRecords.find(r => r.id === recallId);
         if (!recall) return;
 
         const level = Utils.getRecallLevel(recall.level);
         const records = DataStore.getRecordsByBatch(recall.batchNo);
-        const notifiedCount = recall.notifiedCount;
-        const pendingCount = records.length - notifiedCount;
+        const stats = DataStore.getRecallPetStats(recallId);
+        const progress = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
 
         const content = document.getElementById('recallDetailContent');
+
+        const statusTabs = DataStore.RECALL_PET_STATUS_ORDER.map(status => {
+            const count = stats[status] || 0;
+            const label = DataStore.RECALL_PET_STATUS_LABELS[status];
+            return `
+                <span style="display:inline-flex; align-items:center; gap:4px; margin-right:12px; font-size:12px;">
+                    <span style="width:8px; height:8px; border-radius:50%; background:${this.getStatusColor(status)};"></span>
+                    ${label}: ${count}
+                </span>
+            `;
+        }).join('');
+
         content.innerHTML = `
             <div class="detail-section">
                 <div class="detail-grid">
@@ -309,13 +360,20 @@ const RecallModule = {
                                '<span style="color:#999;">已取消</span>')}
                         </div>
                     </div>
-                    <div class="detail-item">
-                        <div class="detail-label">受影响宠物</div>
-                        <div class="detail-value highlight">${recall.affectedCount} 只</div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">已通知宠主</div>
-                        <div class="detail-value success">${recall.notifiedCount} 人</div>
+                    <div class="detail-item full">
+                        <div class="detail-label">处理进度</div>
+                        <div style="margin-top: 8px;">
+                            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+                                <span style="color: #999;">${stats.completed}/${stats.total}</span>
+                                <span style="color: #52c41a; font-weight: 500;">${progress}%</span>
+                            </div>
+                            <div class="stock-bar" style="height: 8px;">
+                                <div class="stock-bar-fill bar-green" style="width: ${progress}%;"></div>
+                            </div>
+                            <div style="margin-top: 8px; line-height: 1.8;">
+                                ${statusTabs}
+                            </div>
+                        </div>
                     </div>
                     <div class="detail-item full">
                         <div class="detail-label">召回原因</div>
@@ -341,48 +399,110 @@ const RecallModule = {
             <div class="detail-section">
                 <div class="detail-section-title">受影响宠物列表（${records.length}条）</div>
                 <div class="detail-item-list">
-                    ${records.map((r, idx) => `
-                        <div class="record-item">
-                            <div class="record-header">
-                                <span class="record-title">
-                                    ${idx + 1}. ${Utils.getPetEmoji(r.petType)} ${Utils.escapeHtml(r.petName)}
-                                </span>
-                                <span class="appointment-tag status-${r.status === 'recalled' ? 'cancelled' : 'completed'}">
-                                    ${r.status === 'recalled' ? '已标记召回' : '待处理'}
-                                </span>
-                            </div>
-                            <div class="record-desc">
-                                宠主：${Utils.escapeHtml(r.ownerName)} · ${Utils.maskPhone(r.ownerPhone)}
-                            </div>
-                            <div class="record-desc">
-                                接种：${r.vaccinationDate} ${r.vaccinationTime}
-                            </div>
-                        </div>
-                    `).join('')}
+                    ${records.map((r, idx) => this.renderPetStatusItem(recallId, r, idx)).join('')}
                 </div>
             </div>
 
-            ${pendingCount > 0 ? `
-                <div class="action-group">
-                    <button class="btn btn-primary btn-block" onclick="RecallModule.resendNotifications('${recall.id}')">
-                        📨 再次推送剩余${pendingCount}条通知
-                    </button>
-                </div>
-            ` : ''}
-
             ${recall.status === 'processing' ? `
                 <div class="action-group">
-                    <button class="btn btn-outline btn-block" onclick="RecallModule.completeRecall('${recall.id}')">
+                    <button class="btn btn-outline btn-block" onclick="RecallModule.completeRecall('${recallId}')">
                         ✓ 标记为处理完成
                     </button>
                 </div>
             ` : ''}
         `;
 
+        content.querySelectorAll('.pet-status-selector select').forEach(select => {
+            select.addEventListener('change', (e) => {
+                const recordId = e.target.dataset.recordId;
+                const newStatus = e.target.value;
+                this.updatePetStatus(recallId, recordId, newStatus);
+            });
+        });
+
         document.getElementById('recallDetailDrawer').classList.add('active');
     },
 
+    getStatusColor(status) {
+        const map = {
+            pending: '#bfbfbf',
+            notified: '#1677ff',
+            contacted: '#fa8c16',
+            reexamined: '#722ed1',
+            revaccinated: '#52c41a',
+            no_action: '#8c8c8c'
+        };
+        return map[status] || '#999';
+    },
+
+    renderPetStatusItem(recallId, record, idx) {
+        const petStatus = DataStore.getRecallPetStatus(recallId, record.id);
+        const currentStatus = petStatus ? petStatus.status : 'pending';
+        const remark = petStatus ? petStatus.remark : '';
+
+        const options = DataStore.RECALL_PET_STATUS_ORDER.map(status => {
+            const label = DataStore.RECALL_PET_STATUS_LABELS[status];
+            return `<option value="${status}" ${status === currentStatus ? 'selected' : ''}>${label}</option>`;
+        }).join('');
+
+        return `
+            <div class="record-item">
+                <div class="record-header">
+                    <span class="record-title">
+                        ${idx + 1}. ${Utils.getPetEmoji(record.petType)} ${Utils.escapeHtml(record.petName)}
+                        <span style="font-size: 11px; color: #999; font-weight: normal; margin-left: 6px;">
+                            ${Utils.escapeHtml(record.petType)}
+                        </span>
+                    </span>
+                </div>
+                <div class="record-desc">
+                    宠主：${Utils.escapeHtml(record.ownerName)} · ${Utils.maskPhone(record.ownerPhone)}
+                </div>
+                <div class="record-desc">
+                    接种：${record.vaccinationDate} ${record.vaccinationTime}
+                </div>
+                <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
+                    <div class="pet-status-selector" style="flex: 1;">
+                        <select class="form-input" data-record-id="${record.id}" style="font-size: 12px; height: 32px;">
+                            ${options}
+                        </select>
+                    </div>
+                    ${remark ? `
+                        <span style="font-size: 11px; color: #999; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            ${Utils.escapeHtml(remark)}
+                        </span>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    },
+
+    updatePetStatus(recallId, recordId, newStatus) {
+        DataStore.setRecallPetStatus(recallId, recordId, newStatus);
+
+        const recall = DataStore.data.recallRecords.find(r => r.id === recallId);
+        if (recall && newStatus === 'revaccinated') {
+            const record = DataStore.data.vaccinationRecords.find(r => r.id === recordId);
+            if (record) {
+                const availableBatches = DataStore.getAvailableBatchesForVaccine(record.vaccineName);
+                if (availableBatches.length > 0 && availableBatches[0].id !== recall.batchId) {
+                    const newBatch = availableBatches[0];
+                    Utils.showToast(`状态已更新：${DataStore.RECALL_PET_STATUS_LABELS[newStatus]}（新批次：${newBatch.batchNo}）`, 'success', 3000);
+                } else {
+                    Utils.showToast(`状态已更新：${DataStore.RECALL_PET_STATUS_LABELS[newStatus]}`, 'success');
+                }
+            }
+        } else {
+            Utils.showToast(`状态已更新：${DataStore.RECALL_PET_STATUS_LABELS[newStatus]}`, 'success');
+        }
+
+        this.renderRecallList();
+        this.showDetail(recallId);
+        App.updateDashboardStats();
+    },
+
     closeDetailDrawer() {
+        this.currentDetailRecallId = null;
         document.getElementById('recallDetailDrawer').classList.remove('active');
     },
 
@@ -405,6 +525,7 @@ const RecallModule = {
         });
 
         Utils.showToast('已推送全部通知', 'success');
+        this.render();
         this.showDetail(recallId);
         App.updateDashboardStats();
     },
@@ -417,6 +538,7 @@ const RecallModule = {
             Utils.showToast('已标记为处理完成', 'success');
             this.renderRecallList();
             this.closeDetailDrawer();
+            App.updateDashboardStats();
         }
     }
 };

@@ -1,12 +1,15 @@
 const DataStore = {
     STORAGE_KEY: 'pet_vaccine_app_data',
-    
+
     defaults: {
         vaccineBatches: [],
         vaccinationRecords: [],
         appointments: [],
         waitlistEntries: [],
         recallRecords: [],
+        recallPetStatuses: [],
+        stockLedger: [],
+        waitlistNotifications: [],
         notifications: [],
         activities: [],
         timeSlots: {}
@@ -18,15 +21,31 @@ const DataStore = {
         const saved = localStorage.getItem(this.STORAGE_KEY);
         if (saved) {
             try {
-                this.data = JSON.parse(saved);
+                const savedData = JSON.parse(saved);
+                this.data = Object.assign({}, JSON.parse(JSON.stringify(this.defaults)), savedData);
+                if (!this.data.recallPetStatuses) this.data.recallPetStatuses = [];
+                if (!this.data.stockLedger) this.data.stockLedger = [];
+                if (!this.data.waitlistNotifications) this.data.waitlistNotifications = [];
+                if (!this.data.notifications) this.data.notifications = [];
+                if (!this.data.activities) this.data.activities = [];
+                if (!this.data.timeSlots) this.data.timeSlots = {};
+                
+                this.data.vaccineBatches.forEach(batch => {
+                    if (batch.reservedQty === undefined) batch.reservedQty = 0;
+                    if (batch.frozenQty === undefined) batch.frozenQty = 0;
+                    if (batch.availableQty === undefined) batch.availableQty = batch.stockQty - (batch.usedQty || 0);
+                });
             } catch (e) {
                 this.data = JSON.parse(JSON.stringify(this.defaults));
+                this.generateMockData();
             }
         } else {
             this.data = JSON.parse(JSON.stringify(this.defaults));
             this.generateMockData();
         }
         this.ensureTimeSlots();
+        this.recalculateSlotBookings();
+        this.recalculateAllBatchQty();
         this.save();
     },
 
@@ -43,6 +62,128 @@ const DataStore = {
 
     generateId() {
         return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+    },
+
+    /* ========== 库存台账 ========== */
+    STOCK_LEDGER_TYPES: {
+        INBOUND: 'inbound',
+        APPOINTMENT_RESERVE: 'appointment_reserve',
+        APPOINTMENT_CANCEL: 'appointment_cancel',
+        VACCINATE_DEDUCT: 'vaccinate_deduct',
+        RECALL_FREEZE: 'recall_freeze',
+        RECALL_UNFREEZE: 'recall_unfreeze',
+        REVACCINATE_ADD: 'revaccinate_add',
+        VOID: 'void',
+        ADJUST: 'adjust'
+    },
+
+    STOCK_LEDGER_TYPE_LABELS: {
+        inbound: '入库',
+        appointment_reserve: '预约占用',
+        appointment_cancel: '预约取消释放',
+        vaccinate_deduct: '接种扣减',
+        recall_freeze: '召回冻结',
+        recall_unfreeze: '召回解冻',
+        revaccinate_add: '补种登记',
+        void: '作废处理',
+        adjust: '库存调整'
+    },
+
+    addStockLedger(batchId, type, changeQty, beforeQty, afterQty, remark, relatedId) {
+        const ledger = {
+            id: this.generateId(),
+            batchId,
+            type,
+            typeLabel: this.STOCK_LEDGER_TYPE_LABELS[type] || type,
+            changeQty,
+            beforeQty,
+            afterQty,
+            remark: remark || '',
+            relatedId: relatedId || null,
+            createdAt: new Date().toISOString()
+        };
+        this.data.stockLedger.unshift(ledger);
+        return ledger;
+    },
+
+    getStockLedgerByBatch(batchId) {
+        return this.data.stockLedger
+            .filter(l => l.batchId === batchId)
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    },
+
+    /* ========== 召回宠物进度 ========== */
+    RECALL_PET_STATUS: {
+        NOTIFIED: 'notified',
+        CONTACTED: 'contacted',
+        REEXAMINED: 'reexamined',
+        REVACCINATED: 'revaccinated',
+        NO_ACTION: 'no_action',
+        PENDING: 'pending'
+    },
+
+    RECALL_PET_STATUS_LABELS: {
+        pending: '待通知',
+        notified: '已通知',
+        contacted: '已联系',
+        reexamined: '已复查',
+        revaccinated: '已补种',
+        no_action: '无需处理'
+    },
+
+    RECALL_PET_STATUS_ORDER: ['pending', 'notified', 'contacted', 'reexamined', 'revaccinated', 'no_action'],
+
+    getRecallPetStatus(recallId, recordId) {
+        return this.data.recallPetStatuses.find(s => s.recallId === recallId && s.recordId === recordId);
+    },
+
+    setRecallPetStatus(recallId, recordId, status, remark) {
+        let existing = this.getRecallPetStatus(recallId, recordId);
+        if (!existing) {
+            existing = {
+                id: this.generateId(),
+                recallId,
+                recordId,
+                status: 'pending',
+                remark: '',
+                updatedAt: new Date().toISOString()
+            };
+            this.data.recallPetStatuses.push(existing);
+        }
+        existing.status = status;
+        if (remark !== undefined) existing.remark = remark;
+        existing.updatedAt = new Date().toISOString();
+        this.save();
+        return existing;
+    },
+
+    getRecallPetStats(recallId) {
+        const statuses = this.data.recallPetStatuses.filter(s => s.recallId === recallId);
+        const stats = {
+            total: 0,
+            pending: 0,
+            notified: 0,
+            contacted: 0,
+            reexamined: 0,
+            revaccinated: 0,
+            no_action: 0,
+            completed: 0
+        };
+
+        const records = this.getRecordsByBatch(DataStore.data.recallRecords.find(r => r.id === recallId)?.batchNo || '');
+        stats.total = records.length;
+
+        records.forEach(r => {
+            const s = statuses.find(x => x.recordId === r.id);
+            const status = s ? s.status : 'pending';
+            stats[status] = (stats[status] || 0) + 1;
+        });
+
+        stats.completed = stats.revaccinated + stats.no_action;
+        stats.pending = stats.total - stats.notified - stats.contacted - stats.reexamined - stats.revaccinated - stats.no_action;
+        if (stats.pending < 0) stats.pending = 0;
+
+        return stats;
     },
 
     generateMockData() {
@@ -62,6 +203,7 @@ const DataStore = {
 
         vaccines.forEach((v, idx) => {
             const batchId = this.generateId();
+            const stockQty = 100 - idx * 15;
             const batch = {
                 id: batchId,
                 vaccineName: v.name,
@@ -69,8 +211,11 @@ const DataStore = {
                 batchNo: `2025${String(idx + 1).padStart(2, '0')}${String(Math.floor(Math.random() * 100)).padStart(3, '0')}A${idx}`,
                 produceDate: dateStr(-30 - idx * 10),
                 expireDate: dateStr(180 + idx * 30),
-                stockQty: 100 - idx * 15,
-                usedQty: 20 + idx * 8,
+                stockQty: stockQty,
+                usedQty: 0,
+                reservedQty: 0,
+                frozenQty: 0,
+                availableQty: stockQty,
                 price: [80, 120, 150, 100][idx],
                 storageCondition: '2-8℃冷藏',
                 remark: '',
@@ -78,6 +223,8 @@ const DataStore = {
                 createdAt: new Date().toISOString()
             };
             this.data.vaccineBatches.push(batch);
+
+            this.addStockLedger(batchId, this.STOCK_LEDGER_TYPES.INBOUND, stockQty, 0, stockQty, '初始入库', null);
 
             const petNames = ['小白', '旺财', '咪咪', '豆豆', '毛球', '乐乐', '贝贝', '妞妞'];
             const ownerNames = ['张三', '李四', '王五', '赵六', '陈七', '刘八', '周九', '吴十'];
@@ -87,7 +234,21 @@ const DataStore = {
                 const recordId = this.generateId();
                 const recordDate = new Date(today);
                 recordDate.setDate(recordDate.getDate() - Math.floor(Math.random() * 30));
-                
+
+                const batch = this.data.vaccineBatches[idx];
+                batch.usedQty += 1;
+                batch.availableQty = batch.stockQty - batch.usedQty - (batch.reservedQty || 0) - (batch.frozenQty || 0);
+
+                this.addStockLedger(
+                    batchId,
+                    this.STOCK_LEDGER_TYPES.VACCINATE_DEDUCT,
+                    -1,
+                    batch.availableQty + 1,
+                    batch.availableQty,
+                    `${petNames[i % petNames.length]}接种`,
+                    recordId
+                );
+
                 this.data.vaccinationRecords.push({
                     id: recordId,
                     batchId: batchId,
@@ -114,7 +275,10 @@ const DataStore = {
             produceDate: dateStr(-200),
             expireDate: dateStr(5),
             stockQty: 30,
-            usedQty: 45,
+            usedQty: 0,
+            reservedQty: 0,
+            frozenQty: 0,
+            availableQty: 30,
             price: 180,
             storageCondition: '2-8℃冷藏',
             remark: '',
@@ -122,20 +286,53 @@ const DataStore = {
             createdAt: new Date().toISOString()
         };
         this.data.vaccineBatches.push(expiryBatch);
+        this.addStockLedger(expiryBatch.id, this.STOCK_LEDGER_TYPES.INBOUND, 30, 0, 30, '初始入库', null);
 
         const petNames = ['小白', '旺财', '咪咪', '豆豆', '毛球', '乐乐', '贝贝', '妞妞', '团团', '圆圆'];
         const ownerNames = ['张三', '李四', '王五', '赵六', '陈七', '刘八', '周九', '吴十', '郑十一', '孙十二'];
         const timeRanges = ['09:00-09:30', '09:30-10:00', '10:00-10:30', '10:30-11:00', '14:00-14:30', '14:30-15:00', '15:00-15:30', '15:30-16:00'];
-        
+
         for (let i = 0; i < 8; i++) {
             const isTimeout = i < 2;
+            const isCompleted = i >= 5;
             const apptDate = new Date(today);
             if (isTimeout) {
                 apptDate.setHours(apptDate.getHours() - 2);
             }
-            
+
+            const batch = this.data.vaccineBatches[i % this.data.vaccineBatches.length];
+            batch.reservedQty = (batch.reservedQty || 0) + 1;
+            batch.availableQty = batch.stockQty - batch.usedQty - batch.reservedQty - (batch.frozenQty || 0);
+
+            const apptId = this.generateId();
+
+            this.addStockLedger(
+                batch.id,
+                this.STOCK_LEDGER_TYPES.APPOINTMENT_RESERVE,
+                -1,
+                batch.availableQty + 1,
+                batch.availableQty,
+                `${petNames[i]}预约占用`,
+                apptId
+            );
+
+            if (isCompleted) {
+                batch.reservedQty -= 1;
+                batch.usedQty += 1;
+                batch.availableQty = batch.stockQty - batch.usedQty - batch.reservedQty - (batch.frozenQty || 0);
+                this.addStockLedger(
+                    batch.id,
+                    this.STOCK_LEDGER_TYPES.VACCINATE_DEDUCT,
+                    -1,
+                    batch.availableQty + 1,
+                    batch.availableQty,
+                    `${petNames[i]}完成接种`,
+                    apptId
+                );
+            }
+
             this.data.appointments.push({
-                id: this.generateId(),
+                id: apptId,
                 date: dateStr(0),
                 timeSlot: timeRanges[i],
                 petName: petNames[i],
@@ -143,20 +340,21 @@ const DataStore = {
                 ownerName: ownerNames[i],
                 ownerPhone: `138${String(Math.floor(Math.random() * 100000000)).padStart(8, '0')}`,
                 vaccineName: vaccines[i % vaccines.length].name,
-                vaccineBatchId: this.data.vaccineBatches[i % this.data.vaccineBatches.length].id,
+                vaccineBatchId: batch.id,
                 remark: '',
-                status: isTimeout ? 'timeout' : (i < 5 ? 'confirmed' : 'completed'),
+                status: isTimeout ? 'timeout' : (isCompleted ? 'completed' : 'confirmed'),
                 createdAt: apptDate.toISOString(),
-                checkedInAt: i >= 5 ? new Date().toISOString() : null,
+                checkedInAt: isCompleted ? new Date().toISOString() : null,
                 timeoutMinutes: isTimeout ? 35 : 0,
-                notifyCount: 0
+                notifyCount: 0,
+                fromWaitlist: false
             });
         }
 
         for (let i = 0; i < 6; i++) {
             const waitDate = new Date(today);
             waitDate.setDate(waitDate.getDate() + (i % 2));
-            
+
             this.data.waitlistEntries.push({
                 id: this.generateId(),
                 date: dateStr(i % 2),
@@ -171,35 +369,69 @@ const DataStore = {
                 expiryDays: 3,
                 createdAt: new Date(today.getTime() - i * 3600000).toISOString(),
                 notifiedAt: i === 0 ? new Date().toISOString() : null,
-                confirmedAt: i === 1 ? new Date().toISOString() : null
+                confirmedAt: i === 1 ? new Date().toISOString() : null,
+                assignedSlot: i === 0 ? '10:00-10:30' : null,
+                notifyExpireMinutes: 15,
+                fromAppointmentId: null
             });
         }
 
+        const firstRecallBatch = this.data.vaccineBatches[0];
+        const firstRecallRecords = this.getRecordsByBatch(firstRecallBatch.batchNo);
+
+        const recallId = this.generateId();
         this.data.recallRecords.push({
-            id: this.generateId(),
-            batchNo: this.data.vaccineBatches[0].batchNo,
-            batchId: this.data.vaccineBatches[0].id,
-            vaccineName: this.data.vaccineBatches[0].vaccineName,
+            id: recallId,
+            batchNo: firstRecallBatch.batchNo,
+            batchId: firstRecallBatch.id,
+            vaccineName: firstRecallBatch.vaccineName,
             reason: '质量问题',
             description: '该批次疫苗在抽检中发现有效成分含量略低于标准，已联系厂家确认，建议对已接种宠物进行观察。',
             action: '建议观察30天，如有异常及时就医；30天后可免费补种新批次疫苗。',
             level: 'high',
-            affectedCount: 5,
-            notifiedCount: 5,
+            affectedCount: firstRecallRecords.length,
+            notifiedCount: firstRecallRecords.length,
             notifyAll: true,
             status: 'processing',
             createdAt: dateStr(-2),
             createdBy: '王医生'
         });
 
+        firstRecallRecords.forEach((record, idx) => {
+            record.status = 'recalled';
+            const statuses = ['notified', 'contacted', 'reexamined', 'revaccinated', 'no_action'];
+            const status = idx < statuses.length ? statuses[idx] : 'notified';
+            this.setRecallPetStatus(recallId, record.id, status, 
+                status === 'revaccinated' ? '已补种新批次疫苗，观察中' :
+                status === 'reexamined' ? '复查结果正常，建议继续观察' :
+                status === 'contacted' ? '宠主表示无异常，预约下周复查' :
+                status === 'no_action' ? '宠主选择不处理，签署知情同意' :
+                ''
+            );
+        });
+
+        firstRecallBatch.status = 'recalled';
+        firstRecallBatch.frozenQty = firstRecallRecords.length;
+        firstRecallBatch.availableQty = firstRecallBatch.stockQty - firstRecallBatch.usedQty - (firstRecallBatch.reservedQty || 0) - firstRecallBatch.frozenQty;
+
+        this.addStockLedger(
+            firstRecallBatch.id,
+            this.STOCK_LEDGER_TYPES.RECALL_FREEZE,
+            -firstRecallRecords.length,
+            firstRecallBatch.availableQty + firstRecallRecords.length,
+            firstRecallBatch.availableQty,
+            `质量问题召回冻结`,
+            recallId
+        );
+
         this.data.notifications.push(
             {
                 id: this.generateId(),
                 type: 'recall',
                 title: '疫苗召回通知',
-                content: `批次 ${this.data.vaccineBatches[0].batchNo} 狂犬疫苗已发起召回，请及时联系受影响宠主。`,
+                content: `批次 ${firstRecallBatch.batchNo} 狂犬疫苗已发起召回，请及时联系受影响宠主。`,
                 read: false,
-                relatedId: this.data.recallRecords[0].id,
+                relatedId: recallId,
                 createdAt: dateStr(-2)
             },
             {
@@ -215,7 +447,7 @@ const DataStore = {
                 id: this.generateId(),
                 type: 'waitlist',
                 title: '候补补位通知',
-                content: '候补第1位的"小白"已成功补位到 10:00-10:30 时段，已通知宠主。',
+                content: `候补第1位的"${petNames[2]}"已成功补位到 10:00-10:30 时段，请15分钟内确认。`,
                 read: true,
                 relatedId: this.data.waitlistEntries[0].id,
                 createdAt: dateStr(0)
@@ -224,12 +456,30 @@ const DataStore = {
                 id: this.generateId(),
                 type: 'expiry',
                 title: '疫苗效期预警',
-                content: `批次 20240615B01 犬八联疫苗将在5天后过期，剩余30剂，请尽快使用。`,
+                content: `批次 20240615B01 犬八联疫苗将在5天后过期，剩余${expiryBatch.availableQty}剂，请尽快使用。`,
                 read: false,
                 relatedId: expiryBatch.id,
                 createdAt: dateStr(0)
             }
         );
+
+        this.data.waitlistNotifications.push({
+            id: this.generateId(),
+            waitlistId: this.data.waitlistEntries[0].id,
+            date: dateStr(0),
+            timeSlot: '10:00-10:30',
+            petName: petNames[2],
+            ownerName: ownerNames[2],
+            type: 'notify',
+            status: 'pending_confirm',
+            reason: '原预约超时释放',
+            sourceAppointmentId: this.data.appointments[2]?.id,
+            notifiedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+            expireAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+            confirmedAt: null,
+            timeoutAt: null,
+            rankAtNotify: 1
+        });
 
         this.data.activities.push(
             { id: this.generateId(), type: 'vaccine', text: '小白完成狂犬疫苗接种', time: '30分钟前' },
@@ -250,7 +500,7 @@ const DataStore = {
                 const slots = [];
                 const morning = ['09:00-09:30', '09:30-10:00', '10:00-10:30', '10:30-11:00', '11:00-11:30'];
                 const afternoon = ['14:00-14:30', '14:30-15:00', '15:00-15:30', '15:30-16:00', '16:00-16:30', '16:30-17:00'];
-                
+
                 morning.forEach(time => {
                     slots.push({
                         time: time,
@@ -270,19 +520,47 @@ const DataStore = {
                 this.data.timeSlots[dateKey] = slots;
             }
         }
-        this.recalculateSlotBookings();
     },
 
     recalculateSlotBookings() {
         Object.keys(this.data.timeSlots).forEach(dateKey => {
             this.data.timeSlots[dateKey].forEach(slot => {
-                slot.booked = this.data.appointments.filter(a => 
-                    a.date === dateKey && 
-                    a.timeSlot === slot.time && 
-                    ['confirmed', 'timeout', 'completed'].includes(a.status)
+                slot.booked = this.data.appointments.filter(a =>
+                    a.date === dateKey &&
+                    a.timeSlot === slot.time &&
+                    ['confirmed', 'completed'].includes(a.status)
                 ).length;
             });
         });
+    },
+
+    recalculateAllBatchQty() {
+        this.data.vaccineBatches.forEach(batch => {
+            if (batch.reservedQty === undefined) batch.reservedQty = 0;
+            if (batch.frozenQty === undefined) batch.frozenQty = 0;
+            if (batch.usedQty === undefined) batch.usedQty = 0;
+            if (batch.stockQty === undefined) batch.stockQty = 0;
+            batch.availableQty = batch.stockQty - batch.usedQty - batch.reservedQty - batch.frozenQty;
+            if (batch.availableQty < 0) batch.availableQty = 0;
+        });
+    },
+
+    getSlotCapacity(date, timeSlot) {
+        const slots = this.data.timeSlots[date] || [];
+        const slot = slots.find(s => s.time === timeSlot);
+        return slot ? slot.capacity : 3;
+    },
+
+    getSlotBooked(date, timeSlot) {
+        return this.data.appointments.filter(a =>
+            a.date === date &&
+            a.timeSlot === timeSlot &&
+            ['confirmed', 'completed'].includes(a.status)
+        ).length;
+    },
+
+    isSlotFull(date, timeSlot) {
+        return this.getSlotBooked(date, timeSlot) >= this.getSlotCapacity(date, timeSlot);
     },
 
     getBatch(batchId) {
@@ -294,10 +572,24 @@ const DataStore = {
             id: this.generateId(),
             ...batchData,
             usedQty: 0,
+            reservedQty: 0,
+            frozenQty: 0,
+            availableQty: batchData.stockQty,
             status: 'normal',
             createdAt: new Date().toISOString()
         };
         this.data.vaccineBatches.unshift(batch);
+
+        this.addStockLedger(
+            batch.id,
+            this.STOCK_LEDGER_TYPES.INBOUND,
+            batch.stockQty,
+            0,
+            batch.stockQty,
+            '新批次入库登记',
+            null
+        );
+
         this.addActivity('register', `新登记批次 ${batch.batchNo} ${batch.vaccineName}`);
         this.save();
         return batch;
@@ -327,10 +619,26 @@ const DataStore = {
             createdAt: new Date().toISOString()
         };
         this.data.vaccinationRecords.unshift(newRecord);
-        
+
         const batch = this.getBatch(record.batchId);
         if (batch) {
+            const beforeQty = batch.availableQty;
             batch.usedQty = (batch.usedQty || 0) + 1;
+            if (batch.reservedQty > 0) {
+                batch.reservedQty -= 1;
+            }
+            batch.availableQty = batch.stockQty - batch.usedQty - batch.reservedQty - (batch.frozenQty || 0);
+
+            this.addStockLedger(
+                batch.id,
+                this.STOCK_LEDGER_TYPES.VACCINATE_DEDUCT,
+                -1,
+                beforeQty,
+                batch.availableQty,
+                `${record.petName}完成接种`,
+                newRecord.id
+            );
+
             this.addActivity('vaccine', `${record.petName}完成${record.vaccineName}接种`);
         }
         this.save();
@@ -353,6 +661,7 @@ const DataStore = {
         if (recallData.notifyAll) {
             affectedRecords.forEach(r => {
                 r.status = 'recalled';
+                this.setRecallPetStatus(recall.id, r.id, 'notified', '系统自动通知');
                 this.addNotification({
                     type: 'recall',
                     title: '疫苗召回通知',
@@ -362,6 +671,25 @@ const DataStore = {
             });
         }
 
+        const batch = this.data.vaccineBatches.find(b => b.batchNo === recallData.batchNo);
+        if (batch) {
+            batch.status = 'recalled';
+            const remaining = batch.stockQty - batch.usedQty - batch.reservedQty;
+            const freezeQty = Math.min(affectedRecords.length, remaining);
+            batch.frozenQty = (batch.frozenQty || 0) + freezeQty;
+            batch.availableQty = batch.stockQty - batch.usedQty - batch.reservedQty - batch.frozenQty;
+
+            this.addStockLedger(
+                batch.id,
+                this.STOCK_LEDGER_TYPES.RECALL_FREEZE,
+                -freezeQty,
+                batch.availableQty + freezeQty,
+                batch.availableQty,
+                `${recall.reason}召回冻结`,
+                recall.id
+            );
+        }
+
         this.addNotification({
             type: 'recall',
             title: '疫苗召回通知',
@@ -369,17 +697,17 @@ const DataStore = {
             relatedId: recall.id
         });
         this.addActivity('recall', `发起${recall.vaccineName}批次召回，影响${affectedRecords.length}只宠物`);
-        
-        const batch = this.data.vaccineBatches.find(b => b.batchNo === recallData.batchNo);
-        if (batch) {
-            batch.status = 'recalled';
-        }
-        
+
         this.save();
         return recall;
     },
 
     addAppointment(appointmentData) {
+        const { date, timeSlot } = appointmentData;
+        if (this.isSlotFull(date, timeSlot)) {
+            throw new Error('该时段已满，无法预约');
+        }
+
         const appointment = {
             id: this.generateId(),
             ...appointmentData,
@@ -390,6 +718,26 @@ const DataStore = {
             notifyCount: 0
         };
         this.data.appointments.unshift(appointment);
+
+        if (appointment.vaccineBatchId) {
+            const batch = this.getBatch(appointment.vaccineBatchId);
+            if (batch) {
+                const beforeQty = batch.availableQty;
+                batch.reservedQty = (batch.reservedQty || 0) + 1;
+                batch.availableQty = batch.stockQty - batch.usedQty - batch.reservedQty - (batch.frozenQty || 0);
+
+                this.addStockLedger(
+                    batch.id,
+                    this.STOCK_LEDGER_TYPES.APPOINTMENT_RESERVE,
+                    -1,
+                    beforeQty,
+                    batch.availableQty,
+                    `${appointment.petName}预约占用`,
+                    appointment.id
+                );
+            }
+        }
+
         this.recalculateSlotBookings();
         this.save();
         return appointment;
@@ -397,21 +745,42 @@ const DataStore = {
 
     cancelAppointment(appointmentId) {
         const apt = this.data.appointments.find(a => a.id === appointmentId);
-        if (apt) {
+        if (apt && apt.status !== 'cancelled') {
+            const oldStatus = apt.status;
             apt.status = 'cancelled';
+
+            if (apt.vaccineBatchId && ['confirmed', 'timeout'].includes(oldStatus)) {
+                const batch = this.getBatch(apt.vaccineBatchId);
+                if (batch && batch.reservedQty > 0) {
+                    const beforeQty = batch.availableQty;
+                    batch.reservedQty -= 1;
+                    batch.availableQty = batch.stockQty - batch.usedQty - batch.reservedQty - (batch.frozenQty || 0);
+
+                    this.addStockLedger(
+                        batch.id,
+                        this.STOCK_LEDGER_TYPES.APPOINTMENT_CANCEL,
+                        1,
+                        beforeQty,
+                        batch.availableQty,
+                        `${apt.petName}取消预约`,
+                        apt.id
+                    );
+                }
+            }
+
             this.recalculateSlotBookings();
-            this.tryFillFromWaitlist(apt.date, apt.timeSlot);
+            this.tryFillFromWaitlist(apt.date, apt.timeSlot, apt.id);
             this.save();
         }
     },
 
     checkInAppointment(appointmentId) {
         const apt = this.data.appointments.find(a => a.id === appointmentId);
-        if (apt) {
+        if (apt && apt.status !== 'completed' && apt.status !== 'cancelled') {
             apt.status = 'completed';
             apt.checkedInAt = new Date().toISOString();
-            
-            const batch = this.data.vaccineBatches.find(b => b.id === apt.vaccineBatchId);
+
+            const batch = apt.vaccineBatchId ? this.getBatch(apt.vaccineBatchId) : null;
             if (batch) {
                 this.addVaccinationRecord({
                     batchId: batch.id,
@@ -426,6 +795,7 @@ const DataStore = {
                     appointmentId: apt.id
                 });
             }
+            this.recalculateSlotBookings();
             this.save();
         }
     },
@@ -441,15 +811,34 @@ const DataStore = {
                 const [hours, minutes] = startTime.split(':').map(Number);
                 const slotDate = new Date(now);
                 slotDate.setHours(hours, minutes, 0, 0);
-                
+
                 const diffMinutes = (now - slotDate) / (1000 * 60);
-                
+
                 if (diffMinutes > 30) {
                     apt.status = 'timeout';
                     apt.timeoutMinutes = Math.floor(diffMinutes);
                     releasedCount++;
-                    
-                    this.tryFillFromWaitlist(apt.date, apt.timeSlot);
+
+                    if (apt.vaccineBatchId) {
+                        const batch = this.getBatch(apt.vaccineBatchId);
+                        if (batch && batch.reservedQty > 0) {
+                            const beforeQty = batch.availableQty;
+                            batch.reservedQty -= 1;
+                            batch.availableQty = batch.stockQty - batch.usedQty - batch.reservedQty - (batch.frozenQty || 0);
+
+                            this.addStockLedger(
+                                batch.id,
+                                this.STOCK_LEDGER_TYPES.APPOINTMENT_CANCEL,
+                                1,
+                                beforeQty,
+                                batch.availableQty,
+                                `${apt.petName}超时释放`,
+                                apt.id
+                            );
+                        }
+                    }
+
+                    this.tryFillFromWaitlist(apt.date, apt.timeSlot, apt.id);
                 }
             }
         });
@@ -471,20 +860,20 @@ const DataStore = {
     },
 
     getAppointmentsBySlot(date, timeSlot) {
-        return this.data.appointments.filter(a => 
-            a.date === date && 
+        return this.data.appointments.filter(a =>
+            a.date === date &&
             a.timeSlot === timeSlot &&
             a.status !== 'cancelled'
         );
     },
 
     addWaitlistEntry(entryData) {
-        const sameDateEntries = this.data.waitlistEntries.filter(e => 
-            e.date === entryData.date && 
-            e.status !== 'expired' && 
+        const sameDateEntries = this.data.waitlistEntries.filter(e =>
+            e.date === entryData.date &&
+            e.status !== 'expired' &&
             e.status !== 'confirmed'
         );
-        
+
         const entry = {
             id: this.generateId(),
             ...entryData,
@@ -492,17 +881,24 @@ const DataStore = {
             status: 'waiting',
             createdAt: new Date().toISOString(),
             notifiedAt: null,
-            confirmedAt: null
+            confirmedAt: null,
+            assignedSlot: null,
+            notifyExpireMinutes: entryData.notifyExpireMinutes || 15,
+            fromAppointmentId: null
         };
         this.data.waitlistEntries.unshift(entry);
         this.save();
         return entry;
     },
 
-    tryFillFromWaitlist(date, timeSlot) {
+    tryFillFromWaitlist(date, timeSlot, sourceAppointmentId) {
+        if (this.isSlotFull(date, timeSlot)) {
+            return null;
+        }
+
         const candidates = this.data.waitlistEntries
-            .filter(e => 
-                e.date === date && 
+            .filter(e =>
+                e.date === date &&
                 e.status === 'waiting' &&
                 (e.preferredSlots.length === 0 || e.preferredSlots.includes(timeSlot))
             )
@@ -513,11 +909,33 @@ const DataStore = {
             winner.status = 'notified';
             winner.notifiedAt = new Date().toISOString();
             winner.assignedSlot = timeSlot;
-            
+            winner.fromAppointmentId = sourceAppointmentId || null;
+
+            const expireAt = new Date(Date.now() + winner.notifyExpireMinutes * 60 * 1000);
+
+            const notification = {
+                id: this.generateId(),
+                waitlistId: winner.id,
+                date,
+                timeSlot,
+                petName: winner.petName,
+                ownerName: winner.ownerName,
+                type: 'notify',
+                status: 'pending_confirm',
+                reason: sourceAppointmentId ? '原预约取消释放' : '时段释放',
+                sourceAppointmentId: sourceAppointmentId || null,
+                notifiedAt: winner.notifiedAt,
+                expireAt: expireAt.toISOString(),
+                confirmedAt: null,
+                timeoutAt: null,
+                rankAtNotify: winner.rank
+            };
+            this.data.waitlistNotifications.unshift(notification);
+
             this.addNotification({
                 type: 'waitlist',
-                title: '候补补位成功',
-                content: `候补第${winner.rank}位的${winner.petName}（宠主：${winner.ownerName}）已补位到 ${date} ${timeSlot}，请及时确认。`,
+                title: '候补补位通知',
+                content: `候补第${winner.rank}位的${winner.petName}（宠主：${winner.ownerName}）已补位到 ${date} ${timeSlot}，请${winner.notifyExpireMinutes}分钟内确认，超时自动顺延。`,
                 relatedId: winner.id
             });
             this.addActivity('notify', `候补${winner.rank}号${winner.petName}补位到${timeSlot}，已推送通知`);
@@ -532,18 +950,91 @@ const DataStore = {
         return null;
     },
 
+    processExpiredWaitlistNotifications() {
+        const now = new Date();
+        let expiredCount = 0;
+
+        const expiredNotifications = this.data.waitlistNotifications
+            .filter(n => n.status === 'pending_confirm' && new Date(n.expireAt) <= now);
+
+        expiredNotifications.forEach(notification => {
+            notification.status = 'timeout';
+            notification.timeoutAt = now.toISOString();
+
+            const entry = this.data.waitlistEntries.find(e => e.id === notification.waitlistId);
+            const date = notification.date;
+            const timeSlot = notification.timeSlot;
+
+            if (entry) {
+                entry.status = 'waiting';
+                entry.notifiedAt = null;
+                entry.assignedSlot = null;
+
+                const sameDateWaiting = this.data.waitlistEntries
+                    .filter(e => e.date === date && e.status === 'waiting');
+                entry.rank = sameDateWaiting.length;
+            }
+
+            const nextWinner = this.tryFillFromWaitlist(date, timeSlot, null);
+
+            if (nextWinner) {
+                const nextNotif = this.data.waitlistNotifications
+                    .filter(n => n.waitlistId === nextWinner.id && n.status === 'pending_confirm')[0];
+                if (nextNotif) {
+                    nextNotif.expiredBy = notification.waitlistId;
+                    notification.followedBy = nextWinner.id;
+                }
+            }
+
+            this.addNotification({
+                type: 'waitlist',
+                title: '候补补位超时',
+                content: `${notification.petName}（宠主：${notification.ownerName}）未在规定时间内确认补位，已自动顺延给下一位候补人员。`,
+                relatedId: notification.waitlistId
+            });
+
+            expiredCount++;
+        });
+
+        if (expiredCount > 0) {
+            this.recalculateSlotBookings();
+            this.save();
+        }
+        return expiredCount;
+    },
+
     confirmWaitlistEntry(entryId) {
         const entry = this.data.waitlistEntries.find(e => e.id === entryId);
-        if (entry && entry.status === 'notified' && entry.assignedSlot) {
-            entry.status = 'confirmed';
-            entry.confirmedAt = new Date().toISOString();
+        if (!entry || entry.status !== 'notified' || !entry.assignedSlot) {
+            return { success: false, message: '补位状态无效' };
+        }
 
-            const batch = this.data.vaccineBatches.find(b => 
-                b.vaccineName === entry.vaccineName && 
-                b.status === 'normal' &&
-                b.stockQty > (b.usedQty || 0)
-            );
+        if (this.isSlotFull(entry.date, entry.assignedSlot)) {
+            return { success: false, message: '该时段已满，无法确认补位' };
+        }
 
+        const availableBatches = this.getAvailableBatchesForVaccine(entry.vaccineName);
+        if (availableBatches.length === 0) {
+            return {
+                success: false,
+                message: `${entry.vaccineName}暂无可用疫苗批次，请等待新批次入库或选择其他疫苗`,
+                type: 'no_stock'
+            };
+        }
+        const assignedBatch = availableBatches[0];
+
+        entry.status = 'confirmed';
+        entry.confirmedAt = new Date().toISOString();
+
+        const notification = this.data.waitlistNotifications
+            .filter(n => n.waitlistId === entryId && n.status === 'pending_confirm')
+            .sort((a, b) => new Date(b.notifiedAt) - new Date(a.notifiedAt))[0];
+        if (notification) {
+            notification.status = 'confirmed';
+            notification.confirmedAt = new Date().toISOString();
+        }
+
+        try {
             this.addAppointment({
                 date: entry.date,
                 timeSlot: entry.assignedSlot,
@@ -552,11 +1043,87 @@ const DataStore = {
                 ownerName: entry.ownerName,
                 ownerPhone: entry.ownerPhone,
                 vaccineName: entry.vaccineName,
-                vaccineBatchId: batch ? batch.id : null,
+                vaccineBatchId: assignedBatch.id,
                 remark: '候补补位',
                 fromWaitlist: true,
                 waitlistId: entryId
             });
+        } catch (e) {
+            entry.status = 'notified';
+            entry.confirmedAt = null;
+            if (notification) {
+                notification.status = 'pending_confirm';
+                notification.confirmedAt = null;
+            }
+            return { success: false, message: e.message };
+        }
+
+        this.save();
+        return { success: true, data: { timeSlot: entry.assignedSlot, batch: assignedBatch } };
+    },
+
+    skipWaitlistEntry(entryId) {
+        const entry = this.data.waitlistEntries.find(e => e.id === entryId);
+        if (!entry || entry.status !== 'notified' || !entry.assignedSlot) {
+            return false;
+        }
+
+        const notification = this.data.waitlistNotifications
+            .filter(n => n.waitlistId === entryId && n.status === 'pending_confirm')
+            .sort((a, b) => new Date(b.notifiedAt) - new Date(a.notifiedAt))[0];
+        if (notification) {
+            notification.status = 'skipped';
+        }
+
+        const date = entry.date;
+        const timeSlot = entry.assignedSlot;
+
+        entry.status = 'waiting';
+        entry.notifiedAt = null;
+        entry.assignedSlot = null;
+
+        const sameDateWaiting = this.data.waitlistEntries
+            .filter(e => e.date === date && e.status === 'waiting');
+        entry.rank = sameDateWaiting.length;
+
+        const nextWinner = this.tryFillFromWaitlist(date, timeSlot, null);
+
+        if (nextWinner && notification) {
+            const nextNotif = this.data.waitlistNotifications
+                .filter(n => n.waitlistId === nextWinner.id && n.status === 'pending_confirm')[0];
+            if (nextNotif) {
+                nextNotif.expiredBy = entryId;
+                notification.followedBy = nextWinner.id;
+            }
+        }
+
+        this.save();
+        return true;
+    },
+
+    cancelWaitlistEntry(entryId) {
+        const entry = this.data.waitlistEntries.find(e => e.id === entryId);
+        if (entry && entry.status !== 'expired' && entry.status !== 'confirmed') {
+            const date = entry.date;
+            const rank = entry.rank;
+
+            if (entry.status === 'notified' && entry.assignedSlot) {
+                const notification = this.data.waitlistNotifications
+                    .filter(n => n.waitlistId === entryId && n.status === 'pending_confirm')
+                    .sort((a, b) => new Date(b.notifiedAt) - new Date(a.notifiedAt))[0];
+                if (notification) {
+                    notification.status = 'cancelled';
+                }
+
+                this.tryFillFromWaitlist(entry.date, entry.assignedSlot, null);
+            }
+
+            this.data.waitlistEntries = this.data.waitlistEntries.filter(e => e.id !== entryId);
+
+            this.data.waitlistEntries
+                .filter(e => e.date === date && e.status === 'waiting' && e.rank > rank)
+                .forEach(e => e.rank--);
+
             this.save();
             return true;
         }
@@ -573,6 +1140,16 @@ const DataStore = {
                 }
                 return a.rank - b.rank;
             });
+    },
+
+    getWaitlistNotifications(waitlistId) {
+        if (waitlistId) {
+            return this.data.waitlistNotifications
+                .filter(n => n.waitlistId === waitlistId)
+                .sort((a, b) => new Date(b.notifiedAt) - new Date(a.notifiedAt));
+        }
+        return [...this.data.waitlistNotifications]
+            .sort((a, b) => new Date(b.notifiedAt) - new Date(a.notifiedAt));
     },
 
     addNotification(notificationData) {
@@ -621,23 +1198,27 @@ const DataStore = {
 
     getAvailableBatchesForVaccine(vaccineName) {
         return this.data.vaccineBatches
-            .filter(b => 
-                b.vaccineName === vaccineName && 
+            .filter(b =>
+                b.vaccineName === vaccineName &&
                 b.status === 'normal' &&
-                b.stockQty > (b.usedQty || 0)
+                b.availableQty > 0
             )
             .sort((a, b) => new Date(a.expireDate) - new Date(b.expireDate));
+    },
+
+    getVaccineHasStock(vaccineName) {
+        return this.getAvailableBatchesForVaccine(vaccineName).length > 0;
     },
 
     getWarnings() {
         const warnings = [];
         const today = new Date();
-        
+
         this.data.vaccineBatches.forEach(batch => {
             const expireDate = new Date(batch.expireDate);
             const daysLeft = Math.ceil((expireDate - today) / (1000 * 60 * 60 * 24));
-            const remaining = batch.stockQty - (batch.usedQty || 0);
-            
+            const remaining = batch.availableQty || 0;
+
             if (daysLeft <= 30 && daysLeft > 0 && remaining > 0) {
                 warnings.push({
                     id: `expire-${batch.id}`,
@@ -649,7 +1230,7 @@ const DataStore = {
         });
 
         const todayStr = today.toISOString().split('T')[0];
-        const timeoutCount = this.data.appointments.filter(a => 
+        const timeoutCount = this.data.appointments.filter(a =>
             a.date === todayStr && a.status === 'timeout'
         ).length;
         if (timeoutCount > 0) {
@@ -662,11 +1243,13 @@ const DataStore = {
         }
 
         this.data.recallRecords.filter(r => r.status === 'processing').forEach(r => {
+            const stats = this.getRecallPetStats(r.id);
+            const pendingCount = stats.total - stats.completed;
             warnings.push({
                 id: `recall-${r.id}`,
                 type: 'recall',
                 title: `召回处理中：${r.vaccineName}`,
-                desc: `批次 ${r.batchNo}，${r.affectedCount}只宠物待回访`
+                desc: `批次 ${r.batchNo}，${pendingCount}只宠物待处理`
             });
         });
 

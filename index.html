@@ -460,7 +460,24 @@
 
                 <!-- 补位通知记录 -->
                 <div class="tab-content" id="tab-waitlist-notify">
+                    <div class="toolbar">
+                        <div style="font-size: 14px; color: #666;">补位通知流水记录</div>
+                        <button class="btn btn-outline" id="refreshWaitlist">↻ 刷新</button>
+                    </div>
                     <div class="notify-list" id="notifyList">
+                    </div>
+                </div>
+
+                <!-- 候补详情抽屉 -->
+                <div class="drawer" id="waitlistDetailDrawer">
+                    <div class="drawer-mask"></div>
+                    <div class="drawer-content drawer-right">
+                        <div class="drawer-header">
+                            <span class="drawer-title">候补详情</span>
+                            <span class="drawer-close" id="closeWaitlistDetail">×</span>
+                        </div>
+                        <div class="drawer-body" id="waitlistDetailContent">
+                        </div>
                     </div>
                 </div>
             </section>
