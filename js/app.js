@@ -26,7 +26,8 @@ const App = {
         this.renderActivities();
         this.updateNotificationBadge();
 
-        this.startTimeoutCheck();
+        this.setupAutoCheckCallback();
+        DataStore.startAutoCheck();
     },
 
     bindNavigation() {
@@ -317,17 +318,34 @@ const App = {
         }
     },
 
-    startTimeoutCheck() {
-        const checkInterval = 60 * 1000;
-        setInterval(() => {
-            if (DataStore.releaseTimeoutAppointments() > 0) {
-                ScheduleModule.render();
-                WaitlistModule.render();
-                this.updateDashboardStats();
-                this.updateNotificationBadge();
-                Utils.showToast('检测到超时预约，已自动释放', 'info', 3000);
+    setupAutoCheckCallback() {
+        const self = this;
+        window.onDataAutoChecked = ({ releasedAppointments, expiredNotifications, movedUpEntries }) => {
+            const hasChanges = (releasedAppointments && releasedAppointments.length > 0)
+                || (expiredNotifications && expiredNotifications.length > 0);
+            if (!hasChanges) return;
+
+            ScheduleModule.render();
+            WaitlistModule.render();
+            BatchModule.render();
+            self.updateDashboardStats();
+            self.updateNotificationBadge();
+            self.renderWarnings();
+
+            const messages = [];
+            if (releasedAppointments && releasedAppointments.length > 0) {
+                messages.push(`释放超时预约 ${releasedAppointments.length} 个`);
             }
-        }, checkInterval);
+            if (expiredNotifications && expiredNotifications.length > 0) {
+                messages.push(`${expiredNotifications.length} 位候补确认超时，已顺延`);
+            }
+            if (movedUpEntries && movedUpEntries.length > 0) {
+                messages.push(`${movedUpEntries.length} 位候补已自动补位通知`);
+            }
+            if (messages.length > 0) {
+                Utils.showToast('🔔 ' + messages.join('，'), 'info', 3500);
+            }
+        };
     }
 };
 

@@ -51,6 +51,26 @@ const WaitlistModule = {
         const dateInput = document.getElementById('waitlistDate');
         dateInput.value = Utils.getDateStr(1);
         dateInput.min = Utils.getTodayStr();
+
+        const filterSelect = document.getElementById('waitlistDateFilter');
+        if (filterSelect) {
+            const dates = [...new Set(DataStore.data.waitlistEntries.map(e => e.date))].sort();
+            if (dates.length === 0) dates.push(Utils.getTodayStr(), Utils.getDateStr(1));
+            filterSelect.innerHTML = '<option value="">全部日期</option>' +
+                dates.map(d => `<option value="${d}">${d}（${Utils.getRelativeDateStr(d)}）</option>`).join('');
+        }
+
+        const slotContainer = document.getElementById('waitlistTimeSlots');
+        if (slotContainer) {
+            const timeRanges = ['09:00-09:30', '09:30-10:00', '10:00-10:30', '10:30-11:00', '11:00-11:30',
+                '14:00-14:30', '14:30-15:00', '15:00-15:30', '15:30-16:00', '16:00-16:30', '16:30-17:00'];
+            slotContainer.innerHTML = timeRanges.map(slot => `
+                <label class="checkbox-item" style="flex: 0 0 30%; margin-bottom: 6px;">
+                    <input type="checkbox" name="preferredSlots" value="${slot}">
+                    <span style="font-size: 12px;">${slot}</span>
+                </label>
+            `).join('');
+        }
     },
 
     renderWaitlistList() {
@@ -118,8 +138,25 @@ const WaitlistModule = {
     },
 
     renderWaitlistItem(entry) {
-        const statusInfo = this.getWaitlistStatusDisplay(entry.status);
         const isNotified = entry.status === 'notified';
+        const isWaiting = entry.status === 'waiting';
+        const hasStock = DataStore.getAvailableBatchesForVaccine(entry.vaccineName).length > 0;
+
+        let statusText, statusClass;
+        if (isNotified) {
+            statusText = '已通知补位';
+            statusClass = 'status-notified';
+        } else if (isWaiting && !hasStock) {
+            statusText = '等待库存补货';
+            statusClass = 'status-expired';
+        } else if (isWaiting) {
+            statusText = '候补中·等时段';
+            statusClass = 'status-waiting';
+        } else {
+            const s = this.getWaitlistStatusDisplay(entry.status);
+            statusText = s.text;
+            statusClass = s.class;
+        }
 
         let extraInfo = '';
         if (isNotified && entry.notifiedAt) {
@@ -133,6 +170,10 @@ const WaitlistModule = {
             } else {
                 extraInfo = `<span style="color:#999; font-size:11px;">即将超时</span>`;
             }
+        } else if (isWaiting && !hasStock) {
+            extraInfo = `<span style="color:#fa8c16; font-size:11px;">📦 批次无库存</span>`;
+        } else if (isWaiting) {
+            extraInfo = `<span style="color:#1677ff; font-size:11px;">🎯 第${entry.rank}顺位</span>`;
         }
 
         return `
@@ -147,7 +188,7 @@ const WaitlistModule = {
                     </div>
                 </div>
                 <div style="text-align: right;">
-                    <span class="waitlist-status ${statusInfo.class}">${statusInfo.text}</span>
+                    <span class="waitlist-status ${statusClass}">${statusText}</span>
                     <div style="margin-top: 4px;">${extraInfo}</div>
                 </div>
             </div>
@@ -202,9 +243,14 @@ const WaitlistModule = {
         const ownerName = form.waitlistOwnerName.value.trim();
         const ownerPhone = form.waitlistOwnerPhone.value.trim();
         const remark = form.waitlistRemark.value.trim();
+        const notifyExpireMinutes = parseInt(form.waitlistExpire ? form.waitlistExpire.value : '3') * 24 * 60;
+
+        const preferredSlots = [];
+        const slotInputs = document.querySelectorAll('#waitlistTimeSlots input[name="preferredSlots"]:checked');
+        slotInputs.forEach(inp => preferredSlots.push(inp.value));
 
         if (!vaccineName) { Utils.showToast('请选择疫苗', 'error'); return; }
-        if (!date) { Utils.showToast('请选择日期', 'error'); return; }
+        if (!date) { Utils.showToast('请选择候补日期', 'error'); return; }
         if (!petName) { Utils.showToast('请输入宠物名', 'error'); return; }
         if (!petType) { Utils.showToast('请选择宠物类型', 'error'); return; }
         if (!ownerName) { Utils.showToast('请输入宠主姓名', 'error'); return; }
@@ -216,7 +262,7 @@ const WaitlistModule = {
         const availableBatches = DataStore.getAvailableBatchesForVaccine(vaccineName);
         const hasStock = availableBatches.length > 0;
 
-        DataStore.addWaitlistEntry({
+        const entry = DataStore.addWaitlistEntry({
             vaccineName,
             date,
             petName,
@@ -224,17 +270,20 @@ const WaitlistModule = {
             ownerName,
             ownerPhone,
             remark,
-            preferredSlots: []
+            preferredSlots,
+            notifyExpireMinutes: notifyExpireMinutes > 0 ? Math.min(notifyExpireMinutes, 60) : 15
         });
 
         if (!hasStock) {
-            Utils.showToast('候补登记成功（暂无可用库存，有货后优先通知）', 'info', 3000);
+            Utils.showToast('候补登记成功（暂无可用库存，补货后优先通知）', 'info', 3500);
         } else {
-            Utils.showToast('候补登记成功', 'success');
+            Utils.showToast('候补登记成功，时段释放后将自动通知', 'success');
         }
 
         this.closeAddModal();
         this.render();
+        ScheduleModule.render();
+        BatchModule.render();
         App.updateDashboardStats();
     },
 
@@ -255,26 +304,48 @@ const WaitlistModule = {
         if (notifications.length === 0) {
             notifHtml = '<div style="text-align: center; padding: 20px; color: #999; font-size: 13px;">暂无补位通知记录</div>';
         } else {
-            notifHtml = notifications.map(n => {
+            notifHtml = notifications.map((n, i) => {
                 const statusDisplay = this.getNotifStatusDisplay(n.status);
                 const causeLabel = this.getNotifCauseDisplay(n.reason);
+                const expireTs = n.notifiedAt ? new Date(new Date(n.notifiedAt).getTime() + (n.notifyExpireMinutes || 15) * 60000) : null;
 
-                let relationText = '';
+                let fromText = '';
                 if (n.expiredBy) {
                     const prevEntry = DataStore.data.waitlistEntries.find(w => w.id === n.expiredBy);
-                    relationText = prevEntry 
-                        ? `<div class="record-desc" style="color:#ff4d4f; margin-top:4px;">因 ${Utils.escapeHtml(prevEntry.petName)} 超时顺延</div>`
-                        : '';
+                    if (prevEntry) {
+                        const prevNotif = DataStore.data.waitlistNotifications.find(x => x.id === n.expiredByNotifId);
+                        const expireTime = prevNotif && prevNotif.expiredAt
+                            ? `（${Utils.formatDate(prevNotif.expiredAt, 'HH:mm')}超时）`
+                            : '';
+                        fromText = `<div style="margin-top:6px; padding:6px 10px; background:#fff1f0; border-radius:6px; font-size:12px; color:#ff4d4f;">
+                            ⬆️ 上一位：${Utils.escapeHtml(prevEntry.petName)} 确认超时 ${expireTime}，顺延至本顺位
+                        </div>`;
+                    }
                 }
+
+                let toText = '';
                 if (n.followedBy) {
                     const nextEntry = DataStore.data.waitlistEntries.find(w => w.id === n.followedBy);
-                    relationText = nextEntry
-                        ? `<div class="record-desc" style="color:#fa8c16; margin-top:4px;">超时后顺延给 ${Utils.escapeHtml(nextEntry.petName)}</div>`
-                        : '';
+                    if (nextEntry) {
+                        const expireAt = n.expiredAt || (n.status === 'timeout' && expireTs);
+                        const expireStr = expireAt
+                            ? `（${Utils.formatDate(expireAt, 'HH:mm')}超时）`
+                            : '';
+                        toText = `<div style="margin-top:6px; padding:6px 10px; background:#fff7e6; border-radius:6px; font-size:12px; color:#fa8c16;">
+                            ⬇️ 下一位：顺延给 ${Utils.escapeHtml(nextEntry.petName)} ${expireStr}
+                        </div>`;
+                    }
+                }
+
+                let metaExtra = '';
+                if (n.status === 'confirmed' && n.confirmedAt) {
+                    metaExtra = `<div class="record-desc" style="color:#52c41a;">确认时间：${Utils.formatDate(n.confirmedAt, 'MM-DD HH:mm')}</div>`;
+                } else if ((n.status === 'timeout' || n.status === 'skipped') && n.expiredAt) {
+                    metaExtra = `<div class="record-desc" style="color:#ff4d4f;">${n.status === 'timeout' ? '超时' : '跳过'}时间：${Utils.formatDate(n.expiredAt, 'MM-DD HH:mm')}</div>`;
                 }
 
                 return `
-                    <div class="record-item">
+                    <div class="record-item" style="${i > 0 ? 'margin-top: 10px;' : ''}">
                         <div class="record-header">
                             <span class="record-title">${causeLabel}</span>
                             <span style="font-size:11px; padding:2px 8px; border-radius:4px; background:${statusDisplay.color}15; color:${statusDisplay.color};">${statusDisplay.text}</span>
@@ -287,7 +358,14 @@ const WaitlistModule = {
                                 补位时段：${n.timeSlot}
                             </div>
                         ` : ''}
-                        ${relationText}
+                        ${n.notifyExpireMinutes ? `
+                            <div class="record-desc" style="color:#8c8c8c;">
+                                确认截止：${Utils.formatDate(expireTs, 'MM-DD HH:mm')}（${n.notifyExpireMinutes}分钟内）
+                            </div>
+                        ` : ''}
+                        ${metaExtra}
+                        ${fromText}
+                        ${toText}
                     </div>
                 `;
             }).join('');

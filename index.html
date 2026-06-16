@@ -256,6 +256,53 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- 安排召回复查/补种预约弹窗 -->
+                    <div class="modal" id="recallAppointModal">
+                        <div class="modal-mask"></div>
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <span class="modal-title" id="recallAppointTitle">安排补种预约</span>
+                                <span class="modal-close" id="closeRecallAppoint">×</span>
+                            </div>
+                            <div class="modal-body">
+                                <form id="recallAppointForm">
+                                    <input type="hidden" id="recallAppointRecordId">
+                                    <input type="hidden" id="recallAppointType">
+                                    <div class="form-group">
+                                        <label class="form-label">宠物信息</label>
+                                        <div id="recallAppointPetInfo" style="padding: 10px; background: #f5f7fa; border-radius: 8px; font-size: 13px;"></div>
+                                    </div>
+                                    <div class="form-row">
+                                        <div class="form-group half">
+                                            <label class="form-label">预约日期 *</label>
+                                            <input type="date" class="form-input" id="recallAppointDate" required>
+                                        </div>
+                                        <div class="form-group half">
+                                            <label class="form-label">预约时段 *</label>
+                                            <select class="form-input" id="recallAppointTimeSlot" required>
+                                                <option value="">请选择时段</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="form-group" id="recallAppointBatchGroup">
+                                        <label class="form-label">选择补种批次 *</label>
+                                        <select class="form-input" id="recallAppointBatchId" required>
+                                            <option value="">请选择可用批次</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">备注</label>
+                                        <textarea class="form-input form-textarea" id="recallAppointRemark" rows="2" placeholder="选填"></textarea>
+                                    </div>
+                                </form>
+                            </div>
+                            <div class="modal-footer">
+                                <button class="btn btn-default" id="cancelRecallAppoint">取消</button>
+                                <button class="btn btn-primary" id="confirmRecallAppoint">确认预约</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </section>
 

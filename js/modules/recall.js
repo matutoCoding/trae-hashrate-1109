@@ -32,6 +32,107 @@ const RecallModule = {
 
         document.getElementById('closeRecallDetail').addEventListener('click', () => this.closeDetailDrawer());
         document.querySelector('#recallDetailDrawer .drawer-mask').addEventListener('click', () => this.closeDetailDrawer());
+
+        document.getElementById('closeRecallAppoint').addEventListener('click', () => this.closeRecallAppointModal());
+        document.getElementById('cancelRecallAppoint').addEventListener('click', () => this.closeRecallAppointModal());
+        document.getElementById('confirmRecallAppoint').addEventListener('click', () => this.handleRecallAppoint());
+    },
+
+    openRecallAppointModal(recallId, recordId, appointType) {
+        const record = DataStore.data.vaccinationRecords.find(r => r.id === recordId);
+        if (!record) return;
+
+        document.getElementById('recallAppointRecordId').value = recordId;
+        document.getElementById('recallAppointType').value = appointType;
+        document.getElementById('recallAppointTitle').textContent = appointType === 'revaccinate' ? '安排补种预约' : '安排复查预约';
+        document.getElementById('recallAppointPetInfo').innerHTML = `
+            <div style="margin-bottom:4px;">
+                <b>${Utils.getPetEmoji(record.petType)} ${Utils.escapeHtml(record.petName)}</b>
+                <span style="color:#999; font-size:12px; margin-left:8px;">${Utils.escapeHtml(record.petType)}</span>
+            </div>
+            <div style="color:#666; margin-bottom:4px;">宠主：${Utils.escapeHtml(record.ownerName)} · ${Utils.maskPhone(record.ownerPhone)}</div>
+            <div style="color:#666;">原接种：${record.vaccinationDate} ${record.vaccinationTime} · 批次 ${record.batchNo}</div>
+        `;
+
+        const today = new Date();
+        const dateInput = document.getElementById('recallAppointDate');
+        dateInput.value = Utils.getDateStr(1);
+        dateInput.min = Utils.getTodayStr();
+        dateInput.onchange = () => this.populateRecallAppointTimeSlots();
+
+        const batchGroup = document.getElementById('recallAppointBatchGroup');
+        if (appointType === 'revaccinate') {
+            batchGroup.style.display = '';
+            const availableBatches = DataStore.getAvailableBatchesForVaccine(record.vaccineName);
+            const batchSelect = document.getElementById('recallAppointBatchId');
+            batchSelect.innerHTML = availableBatches.length === 0
+                ? '<option value="">暂无可用批次</option>'
+                : '<option value="">请选择可用批次</option>' + availableBatches.map(b =>
+                    `<option value="${b.id}">${b.batchNo} · 可用${b.availableQty}剂 · 效期${b.expireDate}</option>`
+                ).join('');
+        } else {
+            batchGroup.style.display = 'none';
+            document.getElementById('recallAppointBatchId').value = '';
+        }
+
+        this.populateRecallAppointTimeSlots();
+        document.getElementById('recallAppointModal').classList.add('active');
+    },
+
+    populateRecallAppointTimeSlots() {
+        const date = document.getElementById('recallAppointDate').value;
+        const slotSelect = document.getElementById('recallAppointTimeSlot');
+        if (!date) { slotSelect.innerHTML = '<option value="">请先选择日期</option>'; return; }
+
+        const timeRanges = ['09:00-09:30', '09:30-10:00', '10:00-10:30', '10:30-11:00', '11:00-11:30',
+            '14:00-14:30', '14:30-15:00', '15:00-15:30', '15:30-16:00', '16:00-16:30', '16:30-17:00'];
+
+        slotSelect.innerHTML = '<option value="">请选择时段</option>' + timeRanges.map(slot => {
+            const booked = DataStore.getSlotBooked(date, slot);
+            const capacity = DataStore.getSlotCapacity(date, slot);
+            const disabled = booked >= capacity ? 'disabled' : '';
+            const suffix = booked >= capacity ? '（已满）' : `（${booked}/${capacity}）`;
+            return `<option value="${slot}" ${disabled}>${slot}${suffix}</option>`;
+        }).join('');
+    },
+
+    closeRecallAppointModal() {
+        document.getElementById('recallAppointModal').classList.remove('active');
+    },
+
+    handleRecallAppoint() {
+        const recordId = document.getElementById('recallAppointRecordId').value;
+        const appointType = document.getElementById('recallAppointType').value;
+        const date = document.getElementById('recallAppointDate').value;
+        const timeSlot = document.getElementById('recallAppointTimeSlot').value;
+        const batchId = document.getElementById('recallAppointBatchId').value;
+
+        if (!date) { Utils.showToast('请选择日期', 'error'); return; }
+        if (!timeSlot) { Utils.showToast('请选择时段', 'error'); return; }
+        if (appointType === 'revaccinate' && !batchId) { Utils.showToast('请选择补种批次', 'error'); return; }
+
+        const aptData = { date, timeSlot, vaccineBatchId: batchId || null };
+        const recallId = this.currentDetailRecallId;
+
+        const result = appointType === 'revaccinate'
+            ? DataStore.createRecallRevaccinateAppointment(recallId, recordId, aptData)
+            : DataStore.createRecallReexamAppointment(recallId, recordId, aptData);
+
+        if (result.success) {
+            Utils.showToast(appointType === 'revaccinate' ? '补种预约已安排' : '复查预约已安排', 'success');
+            this.closeRecallAppointModal();
+            this.render();
+            this.showDetail(recallId);
+            ScheduleModule.render();
+            BatchModule.render();
+            App.updateDashboardStats();
+        } else {
+            if (result.type === 'no_stock') {
+                Utils.showToast('⚠️ 该批次库存不足，请重新选择', 'error');
+            } else {
+                Utils.showToast(result.message || '预约失败', 'error');
+            }
+        }
     },
 
     render() {
@@ -155,6 +256,17 @@ const RecallModule = {
             </span>`;
         }
 
+        const revacTag = record.isRevaccinate
+            ? `<span style="font-size:10px; padding:1px 6px; background:#fff7e6; color:#fa8c16; border-radius:3px; margin-left:4px;">召回补种</span>`
+            : '';
+
+        const revacInfo = record.revaccinationRecordId
+            ? `<div class="vaccination-date" style="color:#52c41a;">🔗 已补种：新批次 ${record.revaccinateBatchId ? DataStore.getBatch(record.revaccinateBatchId)?.batchNo || '-' : '-'}</div>`
+            : '';
+        const originInfo = record.fromRecallId && record.originalRecordId
+            ? `<div class="vaccination-date" style="color:#fa8c16;">🔗 来源召回：原批次 ${DataStore.data.vaccinationRecords.find(x => x.id === record.originalRecordId)?.batchNo || '-'}</div>`
+            : '';
+
         return `
             <div class="vaccination-item">
                 <div class="vaccination-avatar">${Utils.getPetEmoji(record.petType)}</div>
@@ -162,6 +274,7 @@ const RecallModule = {
                     <div class="vaccination-main">
                         <span class="vaccination-pet">${Utils.escapeHtml(record.petName)}</span>
                         <span class="vaccination-type">${Utils.escapeHtml(record.petType)}</span>
+                        ${revacTag}
                     </div>
                     <div class="vaccination-owner">
                         宠主：${Utils.escapeHtml(record.ownerName)} · ${Utils.maskPhone(record.ownerPhone)}
@@ -169,6 +282,8 @@ const RecallModule = {
                     <div class="vaccination-date">
                         接种时间：${record.vaccinationDate} ${record.vaccinationTime}
                     </div>
+                    ${revacInfo}
+                    ${originInfo}
                 </div>
                 ${statusTag}
             </div>
@@ -439,11 +554,34 @@ const RecallModule = {
         const petStatus = DataStore.getRecallPetStatus(recallId, record.id);
         const currentStatus = petStatus ? petStatus.status : 'pending';
         const remark = petStatus ? petStatus.remark : '';
+        const reexamApt = petStatus?.reexamAppointmentId
+            ? DataStore.data.appointments.find(a => a.id === petStatus.reexamAppointmentId)
+            : null;
+        const revaccinateApt = petStatus?.revaccinateAppointmentId
+            ? DataStore.data.appointments.find(a => a.id === petStatus.revaccinateAppointmentId)
+            : null;
+        const revaccinationDone = petStatus?.revaccinationRecordId
+            ? DataStore.data.vaccinationRecords.find(r => r.id === petStatus.revaccinationRecordId)
+            : null;
 
         const options = DataStore.RECALL_PET_STATUS_ORDER.map(status => {
             const label = DataStore.RECALL_PET_STATUS_LABELS[status];
             return `<option value="${status}" ${status === currentStatus ? 'selected' : ''}>${label}</option>`;
         }).join('');
+
+        let appointmentInfo = '';
+        if (reexamApt) {
+            appointmentInfo += `<div class="record-desc" style="color:#1677ff;">📅 复查预约：${reexamApt.date} ${reexamApt.timeSlot}
+                <span style="font-size:10px; padding:1px 6px; background:#e6f4ff; border-radius:3px; margin-left:4px;">${reexamApt.status === 'completed' ? '已完成' : (reexamApt.status === 'cancelled' ? '已取消' : '待就诊')}</span>
+            </div>`;
+        }
+        if (revaccinateApt) {
+            const batch = petStatus?.revaccinateBatchId ? DataStore.getBatch(petStatus.revaccinateBatchId) : null;
+            appointmentInfo += `<div class="record-desc" style="color:#52c41a;">💉 补种预约：${revaccinateApt.date} ${revaccinateApt.timeSlot}
+                <span style="font-size:10px; padding:1px 6px; background:#f6ffed; border-radius:3px; margin-left:4px;">${revaccinationDone ? '已完成' : (revaccinateApt.status === 'cancelled' ? '已取消' : '待接种')}</span>
+                ${batch ? `<span style="color:#8c8c8c; margin-left:4px;">（批次：${batch.batchNo}）</span>` : ''}
+            </div>`;
+        }
 
         return `
             <div class="record-item">
@@ -459,14 +597,21 @@ const RecallModule = {
                     宠主：${Utils.escapeHtml(record.ownerName)} · ${Utils.maskPhone(record.ownerPhone)}
                 </div>
                 <div class="record-desc">
-                    接种：${record.vaccinationDate} ${record.vaccinationTime}
+                    接种：${record.vaccinationDate} ${record.vaccinationTime} · 批次 ${record.batchNo}
                 </div>
-                <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
-                    <div class="pet-status-selector" style="flex: 1;">
+                ${appointmentInfo}
+                <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <div class="pet-status-selector" style="flex: 1; min-width: 140px;">
                         <select class="form-input" data-record-id="${record.id}" style="font-size: 12px; height: 32px;">
                             ${options}
                         </select>
                     </div>
+                    <button class="btn btn-outline" style="font-size:11px; padding:0 10px; height:30px;" onclick="RecallModule.openRecallAppointModal('${recallId}', '${record.id}', 'reexam')">
+                        📅 复查
+                    </button>
+                    <button class="btn btn-primary" style="font-size:11px; padding:0 10px; height:30px;" onclick="RecallModule.openRecallAppointModal('${recallId}', '${record.id}', 'revaccinate')">
+                        💉 补种
+                    </button>
                     ${remark ? `
                         <span style="font-size: 11px; color: #999; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                             ${Utils.escapeHtml(remark)}

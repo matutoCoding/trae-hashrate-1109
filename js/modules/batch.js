@@ -154,7 +154,17 @@ const BatchModule = {
         App.updateDashboardStats();
     },
 
+    currentDetailBatchId: null,
+    ledgerFilters: { type: '', startDate: '', endDate: '' },
+
     showDetail(batchId) {
+        this.currentDetailBatchId = batchId;
+        this.ledgerFilters = { type: '', startDate: '', endDate: '' };
+        this.renderBatchDetail(batchId);
+        document.getElementById('batchDetailDrawer').classList.add('active');
+    },
+
+    renderBatchDetail(batchId) {
         const batch = DataStore.getBatch(batchId);
         if (!batch) return;
 
@@ -166,7 +176,13 @@ const BatchModule = {
         const reserved = batch.reservedQty || 0;
         const frozen = batch.frozenQty || 0;
         const used = batch.usedQty || 0;
-        const ledger = DataStore.getStockLedgerByBatch(batchId);
+        const filters = this.ledgerFilters;
+        const ledger = DataStore.getStockLedgerByBatch(batchId, filters);
+        const ledgerSummary = DataStore.getStockLedgerSummary(batchId, filters);
+
+        const typeOptions = Object.keys(DataStore.STOCK_LEDGER_TYPE_LABELS).map(k =>
+            `<option value="${k}" ${filters.type === k ? 'selected' : ''}>${DataStore.STOCK_LEDGER_TYPE_LABELS[k]}</option>`
+        ).join('');
 
         const content = document.getElementById('batchDetailContent');
         content.innerHTML = `
@@ -244,11 +260,60 @@ const BatchModule = {
 
             <div class="detail-section">
                 <div class="detail-section-title">库存变动流水（${ledger.length}条）</div>
+                <div style="background:#f9fafb; border-radius:8px; padding:12px; margin-bottom:12px;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+                        <select class="form-input" id="ledgerTypeFilter" style="font-size:12px; height:32px;">
+                            <option value="">全部类型</option>
+                            ${typeOptions}
+                        </select>
+                        <button class="btn btn-outline" id="resetLedgerFilter" style="font-size:12px; height:32px; padding:0 12px;">重置筛选</button>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                        <div>
+                            <div style="font-size:11px; color:#999; margin-bottom:4px;">开始日期</div>
+                            <input type="date" class="form-input" id="ledgerStartDate" value="${filters.startDate || ''}" style="font-size:12px; height:32px;">
+                        </div>
+                        <div>
+                            <div style="font-size:11px; color:#999; margin-bottom:4px;">结束日期</div>
+                            <input type="date" class="form-input" id="ledgerEndDate" value="${filters.endDate || ''}" style="font-size:12px; height:32px;">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ledger-stats" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; background:#f0f5ff; border-radius:8px; padding:10px; margin-bottom:12px;">
+                    <div style="text-align:center;">
+                        <div style="font-size:11px; color:#999;">期初余额</div>
+                        <div style="font-size:15px; font-weight:600; color:#666;">${ledgerSummary.startBalance}剂</div>
+                    </div>
+                    <div style="text-align:center;">
+                        <div style="font-size:11px; color:#999;">本期入库</div>
+                        <div style="font-size:15px; font-weight:600; color:#52c41a;">+${ledgerSummary.totalIn}</div>
+                    </div>
+                    <div style="text-align:center;">
+                        <div style="font-size:11px; color:#999;">本期出库</div>
+                        <div style="font-size:15px; font-weight:600; color:#ff4d4f;">-${ledgerSummary.totalOut}</div>
+                    </div>
+                    <div style="text-align:center;">
+                        <div style="font-size:11px; color:#999;">期末余额</div>
+                        <div style="font-size:15px; font-weight:600; color:#1677ff;">${ledgerSummary.endBalance}剂</div>
+                    </div>
+                </div>
+
                 ${ledger.length === 0 ? `
-                    <div class="empty-tip" style="padding: 30px 20px;">暂无流水记录</div>
+                    <div class="empty-tip" style="padding: 30px 20px;">暂无符合条件的流水记录</div>
                 ` : `
                     <div class="detail-item-list">
-                        ${ledger.map(l => `
+                        ${ledger.map(l => {
+                            const related = DataStore.getRelatedInfo(l.relatedId, l.relatedType);
+                            let relatedHtml = '';
+                            if (related) {
+                                const colorMap = { appointment: '#1677ff', recall: '#ff4d4f', vaccination: '#52c41a' };
+                                const color = colorMap[related.type] || '#666';
+                                relatedHtml = `<div class="record-desc" style="color:${color}; cursor:pointer;" onclick="BatchModule.jumpToRelated('${related.type}', '${related.id}')">
+                                    🔗 关联${related.label}：${Utils.escapeHtml(related.title)}
+                                </div>`;
+                            }
+                            return `
                             <div class="record-item">
                                 <div class="record-header">
                                     <span class="record-title">
@@ -262,9 +327,10 @@ const BatchModule = {
                                     </span>
                                 </div>
                                 <div class="record-desc">${Utils.escapeHtml(l.remark)}</div>
+                                ${relatedHtml}
                                 <div class="record-desc">${Utils.formatDate(l.createdAt, 'YYYY-MM-DD HH:mm')}</div>
                             </div>
-                        `).join('')}
+                        `}).join('')}
                     </div>
                 `}
             </div>
@@ -275,7 +341,14 @@ const BatchModule = {
                     <div class="empty-tip" style="padding: 30px 20px;">暂无接种记录</div>
                 ` : `
                     <div class="detail-item-list">
-                        ${records.slice(0, 20).map(r => `
+                        ${records.slice(0, 20).map(r => {
+                            const revacTag = r.isRevaccinate
+                                ? '<span style="font-size:10px; padding:1px 6px; background:#fff7e6; color:#fa8c16; border-radius:3px; margin-left:4px;">召回补种</span>'
+                                : '';
+                            const revacLink = r.revaccinationRecordId
+                                ? `<div class="record-desc" style="color:#52c41a;">🔗 已补种：批次${r.revaccinateBatchId ? DataStore.getBatch(r.revaccinateBatchId)?.batchNo : '-'}</div>`
+                                : '';
+                            return `
                             <div class="record-item">
                                 <div class="record-header">
                                     <span class="record-title">
@@ -283,6 +356,7 @@ const BatchModule = {
                                         <span style="font-size: 11px; color: #999; font-weight: normal; margin-left: 6px;">
                                             ${Utils.escapeHtml(r.petType)}
                                         </span>
+                                        ${revacTag}
                                     </span>
                                     <span class="appointment-tag ${r.status === 'done' ? 'status-completed' : 'status-cancelled'}">
                                         ${r.status === 'done' ? '正常' : '已召回'}
@@ -294,8 +368,9 @@ const BatchModule = {
                                 <div class="record-desc">
                                     接种时间：${r.vaccinationDate} ${r.vaccinationTime}
                                 </div>
+                                ${revacLink}
                             </div>
-                        `).join('')}
+                        `}).join('')}
                         ${records.length > 20 ? `
                             <div style="padding: 10px; text-align: center; color: #999; font-size: 12px;">
                                 仅显示最近20条，请到"流向召回"模块查看完整记录
@@ -314,7 +389,39 @@ const BatchModule = {
             ` : ''}
         `;
 
-        document.getElementById('batchDetailDrawer').classList.add('active');
+        const typeSel = document.getElementById('ledgerTypeFilter');
+        if (typeSel) typeSel.onchange = (e) => { this.ledgerFilters.type = e.target.value; this.renderBatchDetail(batchId); };
+        const startInp = document.getElementById('ledgerStartDate');
+        if (startInp) startInp.onchange = (e) => { this.ledgerFilters.startDate = e.target.value; this.renderBatchDetail(batchId); };
+        const endInp = document.getElementById('ledgerEndDate');
+        if (endInp) endInp.onchange = (e) => { this.ledgerFilters.endDate = e.target.value; this.renderBatchDetail(batchId); };
+        const resetBtn = document.getElementById('resetLedgerFilter');
+        if (resetBtn) resetBtn.onclick = () => { this.ledgerFilters = { type: '', startDate: '', endDate: '' }; this.renderBatchDetail(batchId); };
+    },
+
+    jumpToRelated(type, id) {
+        if (type === 'appointment') {
+            App.navigateTo('page-schedule');
+            Utils.showToast('请在排期页面查看该预约', 'info');
+        } else if (type === 'recall') {
+            App.navigateTo('page-recall');
+            document.querySelector('.tab-item[data-tab="recall-notify"]').click();
+            setTimeout(() => {
+                const cards = document.querySelectorAll('.recall-card');
+                for (const card of cards) {
+                    if (card.dataset.recallId === id) {
+                        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        card.style.boxShadow = '0 0 0 2px #1677ff';
+                        setTimeout(() => card.style.boxShadow = '', 2000);
+                        break;
+                    }
+                }
+            }, 200);
+            Utils.showToast('已跳转至召回管理', 'success');
+        } else if (type === 'vaccination') {
+            App.navigateTo('page-recall');
+            Utils.showToast('请在流向召回模块查询该接种记录', 'info');
+        }
     },
 
     closeDetailDrawer() {
