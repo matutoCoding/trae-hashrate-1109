@@ -96,6 +96,18 @@ const WaitlistModule = {
     render() {
         this.renderWaitlistList();
         this.populateVaccineAndDate();
+
+        const activeTab = document.querySelector('#page-waitlist .tab-item.active');
+        if (activeTab && activeTab.dataset.tab === 'waitlist-notify') {
+            this.renderNotificationList();
+        }
+
+        if (this.currentDetailWaitlistId) {
+            const drawer = document.getElementById('waitlistDetailDrawer');
+            if (drawer && drawer.classList.contains('active')) {
+                this.showDetail(this.currentDetailWaitlistId);
+            }
+        }
     },
 
     populateVaccineAndDate() {
@@ -112,8 +124,9 @@ const WaitlistModule = {
         if (filterSelect) {
             const dates = [...new Set(DataStore.data.waitlistEntries.map(e => e.date))].sort();
             if (dates.length === 0) dates.push(Utils.getTodayStr(), Utils.getDateStr(1));
+            const currentVal = this.dateFilter || '';
             filterSelect.innerHTML = '<option value="">全部日期</option>' +
-                dates.map(d => `<option value="${d}">${d}（${Utils.getRelativeDateStr(d)}）</option>`).join('');
+                dates.map(d => `<option value="${d}" ${d === currentVal ? 'selected' : ''}>${d}（${Utils.getRelativeDateStr(d)}）</option>`).join('');
         }
 
         const slotContainer = document.getElementById('waitlistTimeSlots');
@@ -594,19 +607,44 @@ const WaitlistModule = {
             const entry = DataStore.data.waitlistEntries.find(w => w.id === n.waitlistId);
             const statusDisplay = this.getNotifStatusDisplay(n.status);
             const causeLabel = this.getNotifCauseDisplay(n.reason);
+            const expireTs = n.notifiedAt ? new Date(new Date(n.notifiedAt).getTime() + (n.notifyExpireMinutes || 15) * 60000) : null;
 
-            let relation = '';
+            let fromText = '';
             if (n.expiredBy) {
-                const prev = DataStore.data.waitlistEntries.find(w => w.id === n.expiredBy);
-                if (prev) relation = `因 ${Utils.escapeHtml(prev.petName)} 超时顺延`;
+                const prevEntry = DataStore.data.waitlistEntries.find(w => w.id === n.expiredBy);
+                if (prevEntry) {
+                    fromText = `<div style="margin-top:6px; padding:6px 10px; background:#fff1f0; border-radius:6px; font-size:12px; color:#ff4d4f;">
+                        ⬆️ 上一位：${Utils.escapeHtml(prevEntry.petName)} 超时顺延
+                    </div>`;
+                }
             }
+
+            let toText = '';
             if (n.followedBy) {
-                const next = DataStore.data.waitlistEntries.find(w => w.id === n.followedBy);
-                if (next) relation = `超时后顺延给 ${Utils.escapeHtml(next.petName)}`;
+                const nextEntry = DataStore.data.waitlistEntries.find(w => w.id === n.followedBy);
+                if (nextEntry) {
+                    toText = `<div style="margin-top:6px; padding:6px 10px; background:#fff7e6; border-radius:6px; font-size:12px; color:#fa8c16;">
+                        ⬇️ 顺延给：${Utils.escapeHtml(nextEntry.petName)}
+                    </div>`;
+                }
+            }
+
+            let timeInfo = '';
+            if (n.status === 'confirmed' && n.confirmedAt) {
+                timeInfo = `<div class="record-desc" style="color:#52c41a;">✓ ${Utils.formatDate(n.confirmedAt, 'MM-DD HH:mm')} 已确认</div>`;
+            } else if ((n.status === 'timeout' || n.status === 'skipped') && n.expiredAt) {
+                timeInfo = `<div class="record-desc" style="color:#ff4d4f;">✗ ${Utils.formatDate(n.expiredAt, 'MM-DD HH:mm')} 已超时</div>`;
+            } else if (n.status === 'pending_confirm' && expireTs) {
+                const now = new Date();
+                const remainMs = expireTs - now.getTime();
+                if (remainMs > 0) {
+                    const min = Math.ceil(remainMs / 60000);
+                    timeInfo = `<div class="record-desc" style="color:#ff4d4f;">⏳ 还有${min}分钟截止</div>`;
+                }
             }
 
             return `
-                <div class="record-item" style="background:#fff; border-radius:8px; padding:12px 14px; margin-bottom:8px; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+                <div class="record-item notification-record-item" data-notif-id="${n.id}" style="background:#fff; border-radius:8px; padding:12px 14px; margin-bottom:8px; box-shadow:0 2px 6px rgba(0,0,0,0.03); cursor:pointer;" onclick="WaitlistModule.jumpToWaitlistFromNotif('${n.waitlistId}')">
                     <div class="record-header">
                         <span class="record-title">${causeLabel}</span>
                         <span style="font-size:11px; padding:2px 8px; border-radius:4px; background:${statusDisplay.color}15; color:${statusDisplay.color};">${statusDisplay.text}</span>
@@ -615,11 +653,25 @@ const WaitlistModule = {
                         ${entry ? `${Utils.getPetEmoji(entry.petType)} ${Utils.escapeHtml(entry.petName)} · ${Utils.escapeHtml(entry.vaccineName)}` : '候补记录'}
                     </div>
                     <div class="record-desc">
-                        ${n.date} ${n.timeSlot || ''} · ${Utils.formatDate(n.notifiedAt || n.createdAt, 'HH:mm')}
+                        补位：${n.date} ${n.timeSlot || '-'}
                     </div>
-                    ${relation ? `<div class="record-desc" style="color:${statusDisplay.color};">${relation}</div>` : ''}
+                    <div class="record-desc" style="color:#8c8c8c;">
+                        通知时间：${Utils.formatDate(n.notifiedAt || n.createdAt, 'MM-DD HH:mm')}
+                        ${expireTs ? ` · 截止：${Utils.formatDate(expireTs, 'HH:mm')}` : ''}
+                    </div>
+                    ${timeInfo}
+                    ${fromText}
+                    ${toText}
                 </div>
             `;
         }).join('');
-    }
+    },
+
+    jumpToWaitlistFromNotif(entryId) {
+        const tab = document.querySelector('#page-waitlist .tab-item[data-tab="waitlist-queue"]');
+        if (tab) tab.click();
+        setTimeout(() => {
+            this.showDetail(entryId);
+        }, 150);
+    },
 };

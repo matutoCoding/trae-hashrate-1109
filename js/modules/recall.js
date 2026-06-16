@@ -759,7 +759,8 @@ const RecallModule = {
                 });
 
                 const deductLedger = DataStore.data.stockLedger.find(
-                    l => l.batchId === petStatus.revaccinateBatchId && l.relatedId === revac.id && l.type === DataStore.STOCK_LEDGER_TYPES.VACCINATE_DEDUCT
+                    l => l.batchId === petStatus.revaccinateBatchId && l.relatedId === revac.id &&
+                        (l.type === DataStore.STOCK_LEDGER_TYPES.VACCINATE_DEDUCT || l.type === DataStore.STOCK_LEDGER_TYPES.REVACCINATE_ADD)
                 );
                 if (deductLedger) {
                     nodes.push({

@@ -183,6 +183,9 @@ const DataStore = {
                 if (related) {
                     if (related.title && related.title.toLowerCase().includes(kw)) return true;
                     if (related.subtitle && related.subtitle.toLowerCase().includes(kw)) return true;
+                    if (related.petName && related.petName.toLowerCase().includes(kw)) return true;
+                    if (related.ownerName && related.ownerName.toLowerCase().includes(kw)) return true;
+                    if (related.vaccineName && related.vaccineName.toLowerCase().includes(kw)) return true;
                 }
                 return false;
             });
@@ -321,7 +324,10 @@ const DataStore = {
                     label: '预约',
                     id: apt.id,
                     title: `${apt.petName} · ${apt.vaccineName}`,
-                    subtitle: `${apt.date} ${apt.timeSlot}`
+                    subtitle: `${apt.date} ${apt.timeSlot}`,
+                    petName: apt.petName,
+                    ownerName: apt.ownerName,
+                    vaccineName: apt.vaccineName
                 };
             }
         }
@@ -333,7 +339,9 @@ const DataStore = {
                     label: '召回',
                     id: r.id,
                     title: `${r.vaccineName} · ${r.reason}`,
-                    subtitle: `批次 ${r.batchNo}`
+                    subtitle: `批次 ${r.batchNo}`,
+                    vaccineName: r.vaccineName,
+                    batchNo: r.batchNo
                 };
             }
         }
@@ -345,7 +353,10 @@ const DataStore = {
                     label: '接种',
                     id: v.id,
                     title: `${v.petName} · ${v.vaccineName}`,
-                    subtitle: `${v.vaccinationDate} ${v.vaccinationTime}`
+                    subtitle: `${v.vaccinationDate} ${v.vaccinationTime}`,
+                    petName: v.petName,
+                    ownerName: v.ownerName,
+                    vaccineName: v.vaccineName
                 };
             }
         }
