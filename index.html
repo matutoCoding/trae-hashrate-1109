@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>宠物医院疫苗接种管理系统</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- 顶部钉钉导航栏 -->
+        <header class="dd-header">
+            <div class="dd-header-left" id="headerBack" style="display:none;">
+                <span class="icon-back">‹</span>
+            </div>
+            <div class="dd-header-title" id="headerTitle">疫苗接种管理</div>
+            <div class="dd-header-right">
+                <span class="icon-notification" id="notificationBell">🔔</span>
+                <span class="notification-badge" id="notificationBadge" style="display:none;">0</span>
+            </div>
+        </header>
+
+        <!-- 主内容区域 -->
+        <main class="dd-content" id="mainContent">
+            <!-- 首页仪表盘 -->
+            <section class="page page-dashboard active" id="page-dashboard">
+                <!-- 统计卡片 -->
+                <div class="stats-grid">
+                    <div class="stat-card stat-blue">
+                        <div class="stat-value" id="statBatchCount">0</div>
+                        <div class="stat-label">疫苗批次</div>
+                    </div>
+                    <div class="stat-card stat-green">
+                        <div class="stat-value" id="statVaccinatedCount">0</div>
+                        <div class="stat-label">已接种</div>
+                    </div>
+                    <div class="stat-card stat-orange">
+                        <div class="stat-value" id="statTodayAppointments">0</div>
+                        <div class="stat-label">今日预约</div>
+                    </div>
+                    <div class="stat-card stat-red">
+                        <div class="stat-value" id="statWaitingCount">0</div>
+                        <div class="stat-label">候补人数</div>
+                    </div>
+                </div>
+
+                <!-- 功能入口九宫格 -->
+                <div class="section-title">功能模块</div>
+                <div class="menu-grid">
+                    <div class="menu-item" data-page="page-batch">
+                        <div class="menu-icon icon-batch">💉</div>
+                        <div class="menu-label">疫苗批次管理</div>
+                    </div>
+                    <div class="menu-item" data-page="page-recall">
+                        <div class="menu-icon icon-recall">📋</div>
+                        <div class="menu-label">流向召回</div>
+                    </div>
+                    <div class="menu-item" data-page="page-schedule">
+                        <div class="menu-icon icon-schedule">📅</div>
+                        <div class="menu-label">接种排期</div>
+                    </div>
+                    <div class="menu-item" data-page="page-waitlist">
+                        <div class="menu-icon icon-waitlist">🔄</div>
+                        <div class="menu-label">候补补位</div>
+                    </div>
+                </div>
+
+                <!-- 预警提醒 -->
+                <div class="section-title">预警提醒</div>
+                <div class="warning-list" id="warningList">
+                </div>
+
+                <!-- 最近动态 -->
+                <div class="section-title">最近动态</div>
+                <div class="activity-list" id="activityList">
+                </div>
+            </section>
+
+            <!-- 疫苗批次管理页面 -->
+            <section class="page page-batch" id="page-batch">
+                <div class="toolbar">
+                    <input type="text" class="search-input" id="batchSearch" placeholder="搜索疫苗名称/批号...">
+                    <button class="btn btn-primary" id="addBatchBtn">+ 登记批次</button>
+                </div>
+                <div class="batch-list" id="batchList">
+                </div>
+
+                <!-- 批次详情抽屉 -->
+                <div class="drawer" id="batchDetailDrawer">
+                    <div class="drawer-mask"></div>
+                    <div class="drawer-content drawer-right">
+                        <div class="drawer-header">
+                            <span class="drawer-title">批次详情</span>
+                            <span class="drawer-close" id="closeBatchDetail">×</span>
+                        </div>
+                        <div class="drawer-body" id="batchDetailContent">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 新增批次弹窗 -->
+                <div class="modal" id="addBatchModal">
+                    <div class="modal-mask"></div>
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <span class="modal-title">登记疫苗批次</span>
+                            <span class="modal-close" id="closeAddBatch">×</span>
+                        </div>
+                        <div class="modal-body">
+                            <form id="addBatchForm">
+                                <div class="form-group">
+                                    <label class="form-label">疫苗名称 *</label>
+                                    <select class="form-input" id="vaccineName" required>
+                                        <option value="">请选择疫苗</option>
+                                        <option value="狂犬疫苗">狂犬疫苗</option>
+                                        <option value="犬四联疫苗">犬四联疫苗</option>
+                                        <option value="犬六联疫苗">犬六联疫苗</option>
+                                        <option value="犬八联疫苗">犬八联疫苗</option>
+                                        <option value="猫三联疫苗">猫三联疫苗</option>
+                                        <option value="猫四联疫苗">猫四联疫苗</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">生产厂家</label>
+                                    <input type="text" class="form-input" id="manufacturer" placeholder="如：硕腾、梅里亚">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">批号 *</label>
+                                    <input type="text" class="form-input" id="batchNo" required placeholder="如：20250101A01">
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group half">
+                                        <label class="form-label">生产日期 *</label>
+                                        <input type="date" class="form-input" id="produceDate" required>
+                                    </div>
+                                    <div class="form-group half">
+                                        <label class="form-label">有效期至 *</label>
+                                        <input type="date" class="form-input" id="expireDate" required>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group half">
+                                        <label class="form-label">入库数量 *</label>
+                                        <input type="number" class="form-input" id="stockQty" required min="1" placeholder="剂">
+                                    </div>
+                                    <div class="form-group half">
+                                        <label class="form-label">接种价格(元)</label>
+                                        <input type="number" class="form-input" id="price" min="0" step="0.01">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">存储条件</label>
+                                    <input type="text" class="form-input" id="storageCondition" placeholder="如：2-8℃冷藏">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">备注</label>
+                                    <textarea class="form-input form-textarea" id="batchRemark" rows="2" placeholder="选填"></textarea>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-default" id="cancelAddBatch">取消</button>
+                            <button class="btn btn-primary" id="confirmAddBatch">确认登记</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 流向召回页面 -->
+            <section class="page page-recall" id="page-recall">
+                <div class="tab-bar">
+                    <div class="tab-item active" data-tab="recall-trace">批次流向追踪</div>
+                    <div class="tab-item" data-tab="recall-notify">召回管理</div>
+                </div>
+
+                <!-- 批次流向追踪 -->
+                <div class="tab-content active" id="tab-recall-trace">
+                    <div class="toolbar">
+                        <input type="text" class="search-input" id="traceSearch" placeholder="输入批号反查接种记录...">
+                        <button class="btn btn-primary" id="traceSearchBtn">查询</button>
+                    </div>
+                    <div class="trace-result" id="traceResult">
+                        <div class="empty-tip">请输入批号查询该批次疫苗的接种流向</div>
+                    </div>
+                </div>
+
+                <!-- 召回管理 -->
+                <div class="tab-content" id="tab-recall-notify">
+                    <div class="toolbar">
+                        <button class="btn btn-primary" id="createRecallBtn">+ 发起召回</button>
+                    </div>
+                    <div class="recall-list" id="recallList">
+                    </div>
+
+                    <!-- 发起召回弹窗 -->
+                    <div class="modal" id="createRecallModal">
+                        <div class="modal-mask"></div>
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <span class="modal-title">发起疫苗召回</span>
+                                <span class="modal-close" id="closeCreateRecall">×</span>
+                            </div>
+                            <div class="modal-body">
+                                <form id="createRecallForm">
+                                    <div class="form-group">
+                                        <label class="form-label">问题批号 *</label>
+                                        <select class="form-input" id="recallBatchNo" required>
+                                            <option value="">请选择批次</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">召回原因 *</label>
+                                        <select class="form-input" id="recallReason" required>
+                                            <option value="">请选择原因</option>
+                                            <option value="质量问题">质量问题</option>
+                                            <option value="效期异常">效期异常</option>
+                                            <option value="存储不当">存储不当</option>
+                                            <option value="厂家召回">厂家召回</option>
+                                            <option value="其他">其他</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">召回说明 *</label>
+                                        <textarea class="form-input form-textarea" id="recallDescription" rows="3" required placeholder="请详细描述召回原因和注意事项"></textarea>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">处理建议</label>
+                                        <textarea class="form-input form-textarea" id="recallAction" rows="2" placeholder="如：补种新批次疫苗、观察30天等"></textarea>
+                                    </div>
+                                    <div class="form-group checkbox-group">
+                                        <label>
+                                            <input type="checkbox" id="notifyAll" checked>
+                                            <span>同时通知所有受影响宠主（钉钉消息）</span>
+                                        </label>
+                                    </div>
+                                </form>
+                            </div>
+                            <div class="modal-footer">
+                                <button class="btn btn-default" id="cancelCreateRecall">取消</button>
+                                <button class="btn btn-danger" id="confirmCreateRecall">确认发起召回</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 召回详情抽屉 -->
+                    <div class="drawer" id="recallDetailDrawer">
+                        <div class="drawer-mask"></div>
+                        <div class="drawer-content drawer-right">
+                            <div class="drawer-header">
+                                <span class="drawer-title">召回详情</span>
+                                <span class="drawer-close" id="closeRecallDetail">×</span>
+                            </div>
+                            <div class="drawer-body" id="recallDetailContent">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 接种排期页面 -->
+            <section class="page page-schedule" id="page-schedule">
+                <div class="date-selector">
+                    <button class="date-nav" id="prevDate">‹</button>
+                    <div class="date-display" id="currentDateDisplay">今天</div>
+                    <button class="date-nav" id="nextDate">›</button>
+                </div>
+
+                <div class="schedule-stats">
+                    <div class="schedule-stat-item">
+                        <span class="stat-num" id="scheduleTotal">0</span>
+                        <span class="stat-desc">总时段数</span>
+                    </div>
+                    <div class="schedule-stat-item">
+                        <span class="stat-num booked" id="scheduleBooked">0</span>
+                        <span class="stat-desc">已预约</span>
+                    </div>
+                    <div class="schedule-stat-item">
+                        <span class="stat-num available" id="scheduleAvailable">0</span>
+                        <span class="stat-desc">可预约</span>
+                    </div>
+                    <div class="schedule-stat-item">
+                        <span class="stat-num timeout" id="scheduleTimeout">0</span>
+                        <span class="stat-desc">超时待释放</span>
+                    </div>
+                </div>
+
+                <div class="toolbar">
+                    <button class="btn btn-outline" id="refreshSchedule">🔄 刷新超时释放</button>
+                    <button class="btn btn-primary" id="addAppointmentBtn">+ 新增预约</button>
+                </div>
+
+                <div class="time-slot-list" id="timeSlotList">
+                </div>
+
+                <!-- 新增预约弹窗 -->
+                <div class="modal" id="addAppointmentModal">
+                    <div class="modal-mask"></div>
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <span class="modal-title">新增接种预约</span>
+                            <span class="modal-close" id="closeAddAppointment">×</span>
+                        </div>
+                        <div class="modal-body">
+                            <form id="addAppointmentForm">
+                                <div class="form-group">
+                                    <label class="form-label">预约时段 *</label>
+                                    <select class="form-input" id="appointmentTimeSlot" required>
+                                        <option value="">请选择时段</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group half">
+                                        <label class="form-label">宠物昵称 *</label>
+                                        <input type="text" class="form-input" id="petName" required placeholder="如：小白">
+                                    </div>
+                                    <div class="form-group half">
+                                        <label class="form-label">宠物类型</label>
+                                        <select class="form-input" id="petType">
+                                            <option value="犬">犬</option>
+                                            <option value="猫">猫</option>
+                                            <option value="其他">其他</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group half">
+                                        <label class="form-label">宠主姓名 *</label>
+                                        <input type="text" class="form-input" id="ownerName" required placeholder="如：张三">
+                                    </div>
+                                    <div class="form-group half">
+                                        <label class="form-label">联系电话 *</label>
+                                        <input type="tel" class="form-input" id="ownerPhone" required placeholder="如：13800138000">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">接种疫苗 *</label>
+                                    <select class="form-input" id="appointmentVaccine" required>
+                                        <option value="">请选择疫苗（将自动分配批次）</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">备注</label>
+                                    <textarea class="form-input form-textarea" id="appointmentRemark" rows="2"></textarea>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-default" id="cancelAddAppointment">取消</button>
+                            <button class="btn btn-primary" id="confirmAddAppointment">确认预约</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 预约详情弹窗 -->
+                <div class="modal" id="appointmentDetailModal">
+                    <div class="modal-mask"></div>
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <span class="modal-title">预约详情</span>
+                            <span class="modal-close" id="closeAppointmentDetail">×</span>
+                        </div>
+                        <div class="modal-body" id="appointmentDetailContent">
+                        </div>
+                        <div class="modal-footer" id="appointmentDetailFooter">
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 候补补位页面 -->
+            <section class="page page-waitlist" id="page-waitlist">
+                <div class="tab-bar">
+                    <div class="tab-item active" data-tab="waitlist-queue">候补排队</div>
+                    <div class="tab-item" data-tab="waitlist-notify">补位通知记录</div>
+                </div>
+
+                <!-- 候补排队 -->
+                <div class="tab-content active" id="tab-waitlist-queue">
+                    <div class="toolbar">
+                        <select class="form-input filter-select" id="waitlistDateFilter">
+                        </select>
+                        <button class="btn btn-primary" id="addWaitlistBtn">+ 登记候补</button>
+                    </div>
+
+                    <div class="waitlist-stats" id="waitlistStats">
+                    </div>
+
+                    <div class="waitlist-list" id="waitlistList">
+                    </div>
+
+                    <!-- 候补排队登记弹窗 -->
+                    <div class="modal" id="addWaitlistModal">
+                        <div class="modal-mask"></div>
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <span class="modal-title">登记候补排队</span>
+                                <span class="modal-close" id="closeAddWaitlist">×</span>
+                            </div>
+                            <div class="modal-body">
+                                <form id="addWaitlistForm">
+                                    <div class="form-group">
+                                        <label class="form-label">候补日期 *</label>
+                                        <input type="date" class="form-input" id="waitlistDate" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">期望时段（可选多个）</label>
+                                        <div class="checkbox-list" id="waitlistTimeSlots">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <div class="form-group half">
+                                            <label class="form-label">宠物昵称 *</label>
+                                            <input type="text" class="form-input" id="waitlistPetName" required>
+                                        </div>
+                                        <div class="form-group half">
+                                            <label class="form-label">宠物类型</label>
+                                            <select class="form-input" id="waitlistPetType">
+                                                <option value="犬">犬</option>
+                                                <option value="猫">猫</option>
+                                                <option value="其他">其他</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <div class="form-group half">
+                                            <label class="form-label">宠主姓名 *</label>
+                                            <input type="text" class="form-input" id="waitlistOwnerName" required>
+                                        </div>
+                                        <div class="form-group half">
+                                            <label class="form-label">联系电话 *</label>
+                                            <input type="tel" class="form-input" id="waitlistOwnerPhone" required>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">接种疫苗 *</label>
+                                        <select class="form-input" id="waitlistVaccine" required>
+                                            <option value="">请选择疫苗</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">候补有效期</label>
+                                        <select class="form-input" id="waitlistExpire">
+                                            <option value="1">当日前有效</option>
+                                            <option value="3" selected>3天内有效</option>
+                                            <option value="7">7天内有效</option>
+                                            <option value="30">长期有效</option>
+                                        </select>
+                                    </div>
+                                </form>
+                            </div>
+                            <div class="modal-footer">
+                                <button class="btn btn-default" id="cancelAddWaitlist">取消</button>
+                                <button class="btn btn-primary" id="confirmAddWaitlist">确认候补</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 补位通知记录 -->
+                <div class="tab-content" id="tab-waitlist-notify">
+                    <div class="notify-list" id="notifyList">
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- 底部Tab栏 -->
+        <footer class="dd-tabbar">
+            <div class="dd-tab-item active" data-page="page-dashboard">
+                <span class="dd-tab-icon">🏠</span>
+                <span class="dd-tab-label">首页</span>
+            </div>
+            <div class="dd-tab-item" data-page="page-batch">
+                <span class="dd-tab-icon">💉</span>
+                <span class="dd-tab-label">批次</span>
+            </div>
+            <div class="dd-tab-item" data-page="page-schedule">
+                <span class="dd-tab-icon">📅</span>
+                <span class="dd-tab-label">排期</span>
+            </div>
+            <div class="dd-tab-item" data-page="page-waitlist">
+                <span class="dd-tab-icon">🔄</span>
+                <span class="dd-tab-label">候补</span>
+            </div>
+            <div class="dd-tab-item" data-page="page-recall">
+                <span class="dd-tab-icon">📋</span>
+                <span class="dd-tab-label">召回</span>
+            </div>
+        </footer>
+
+        <!-- Toast 提示 -->
+        <div class="toast" id="toast"></div>
+
+        <!-- 通知中心抽屉 -->
+        <div class="drawer" id="notificationDrawer">
+            <div class="drawer-mask"></div>
+            <div class="drawer-content drawer-right drawer-small">
+                <div class="drawer-header">
+                    <span class="drawer-title">消息通知</span>
+                    <span class="drawer-close" id="closeNotificationDrawer">×</span>
+                </div>
+                <div class="drawer-body" id="notificationList">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/data.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/modules/batch.js"></script>
+    <script src="js/modules/recall.js"></script>
+    <script src="js/modules/schedule.js"></script>
+    <script src="js/modules/waitlist.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
